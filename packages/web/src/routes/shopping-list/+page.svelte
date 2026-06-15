@@ -67,7 +67,7 @@
 <div class="max-w-2xl mx-auto p-4 space-y-4">
   <!-- Week nav -->
   <div class="flex items-center justify-between">
-    <button onclick={prevWeek} class="p-2 rounded-lg hover:bg-gray-200">◀</button>
+    <button onclick={prevWeek} class="p-2 rounded-lg transition-colors hover:opacity-70" style="color: var(--color-text-muted)">◀</button>
     <div class="text-center">
       <div class="font-semibold text-gray-800 text-sm">{weekLabel}</div>
       <div class="text-xs text-gray-400">{totalItems} items · {checkedCount} ticked off</div>
@@ -78,43 +78,45 @@
   {#if loading}
     <div class="flex justify-center py-10"><div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div></div>
   {:else if list.length === 0}
-    <div class="text-center py-12 text-gray-400">
+    <div class="text-center py-12" style="color: var(--color-text-muted)">
       <div class="text-5xl mb-3">🛒</div>
       <p class="font-medium">No meals planned this week</p>
-      <p class="text-sm mt-1"><a href="/planner" class="text-green-700 underline">Plan some meals</a> first</p>
+      <p class="text-sm mt-1"><a href="/planner" class="underline" style="color: var(--color-accent)">Plan some meals</a> first</p>
     </div>
   {:else}
     <!-- Action bar -->
     <div class="flex gap-2">
       <button onclick={shareList}
-        class="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2">
+        class="flex-1 text-white font-semibold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
+        style="background: var(--color-accent)">
         📤 Share / Copy List
       </button>
       <a href="https://www.checkers.co.za/sixty60" target="_blank" rel="noopener noreferrer"
-        class="flex-1 bg-white border border-gray-200 text-gray-700 font-semibold py-2.5 rounded-xl hover:bg-gray-50 transition-colors flex items-center justify-center gap-2 text-center text-sm">
+        class="flex-1 font-semibold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 text-center text-sm border"
+        style="background: var(--color-surface); border-color: var(--color-border); color: var(--color-text)">
         🛍️ Open Sixty60
       </a>
     </div>
 
     {#if shareError}
-      <p class="text-sm text-center {shareError.startsWith('✅') ? 'text-green-700' : 'text-red-600'}">{shareError}</p>
+      <p class="text-sm text-center" style="color: {shareError.startsWith('✅') ? 'var(--color-accent)' : 'var(--color-danger)'}">{shareError}</p>
     {/if}
 
     <!-- Categories -->
     {#each list as cat}
-      <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div class="px-4 py-2.5 bg-gray-50 border-b font-semibold text-gray-700 text-sm">{cat.categoryName}</div>
-        <ul class="divide-y divide-gray-50">
+      <div class="rounded-xl shadow-sm overflow-hidden" style="background: var(--color-surface); border: 1px solid var(--color-border)">
+        <div class="px-4 py-2.5 border-b font-semibold text-sm" style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">{cat.categoryName}</div>
+        <ul>
           {#each cat.items as item}
             {@const key = `${cat.categoryId}::${item.ingredientId}`}
-            <li class="px-4 py-3 flex items-center gap-3">
+            <li class="px-4 py-3 flex items-center gap-3 border-b" style="border-color: var(--color-border)">
               <button onclick={() => toggleItem(key)}
-                class="w-5 h-5 rounded border-2 shrink-0 transition-colors flex items-center justify-center
-                  {checked.has(key) ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 hover:border-green-500'}">
+                class="w-5 h-5 rounded border-2 shrink-0 transition-colors flex items-center justify-center"
+                style="{checked.has(key) ? 'background: var(--color-accent); border-color: var(--color-accent); color: white;' : 'border-color: var(--color-border);'}">
                 {#if checked.has(key)}<span class="text-xs leading-none">✓</span>{/if}
               </button>
-              <span class="flex-1 text-sm {checked.has(key) ? 'line-through text-gray-400' : 'text-gray-800'}">{item.name}</span>
-              <span class="text-sm font-medium {checked.has(key) ? 'text-gray-300' : 'text-gray-600'}">{item.quantity} {item.unit}</span>
+              <span class="flex-1 text-sm" style="color: {checked.has(key) ? 'var(--color-text-muted)' : 'var(--color-text)'}; text-decoration: {checked.has(key) ? 'line-through' : 'none'}">{item.name}</span>
+              <span class="text-sm font-medium" style="color: {checked.has(key) ? 'var(--color-border)' : 'var(--color-text-muted)'}">{item.quantity} {item.unit}</span>
             </li>
           {/each}
         </ul>

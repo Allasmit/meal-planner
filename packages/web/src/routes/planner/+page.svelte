@@ -28,6 +28,15 @@
   let dietaryTypes = $state<DietaryType[]>([]);
   let cuisines = $state<Cuisine[]>([]);
 
+  // Auto-generate state
+  let autoOpen = $state(false);
+  let autoOverwrite = $state(false);
+  let autoPrepLimit = $state<number | null>(null);
+  let autoLeftovers = $state(true);
+  let autoLoading = $state(false);
+  let autoError = $state('');
+  let autoResult = $state<{ generated: number } | null>(null);
+
   let weekDays = $derived(getWeekDays(weekStart));
   let weekLabel = $derived(formatWeekRange(weekStart));
 
@@ -116,18 +125,42 @@
     } catch { /* slot may not exist */ }
   }
 
+  async function autoGenerate() {
+    autoLoading = true; autoError = ''; autoResult = null;
+    try {
+      const days = weekDays.flatMap((day) =>
+        MEAL_SLOTS.map((slot) => ({
+          date: toDateString(day),
+          slot,
+          prepTimeLimitMinutes: autoPrepLimit,
+          leftoversRequired: autoLeftovers,
+        }))
+      );
+      autoResult = await api.autoGenerateWeek({ days, overwriteExisting: autoOverwrite }) as any;
+      autoOpen = false;
+      await loadWeek();
+    } catch (e: any) {
+      autoError = e.message;
+    } finally {
+      autoLoading = false;
+    }
+  }
+
   const today = toDateString(new Date());
 </script>
 
 <div class="p-4 max-w-6xl mx-auto">
   <!-- Week navigation -->
   <div class="flex items-center justify-between mb-4 gap-2">
-    <button onclick={prevWeek} class="p-2 rounded-lg hover:bg-gray-200 transition-colors">◀</button>
+    <button onclick={prevWeek} class="p-2 rounded-lg transition-colors hover:opacity-70" style="color: var(--color-text-muted)">◀</button>
     <div class="text-center">
-      <div class="font-semibold text-gray-800">{weekLabel}</div>
-      <button onclick={goToday} class="text-xs text-green-700 hover:underline">Today</button>
+      <div class="font-semibold" style="color: var(--color-text)">{weekLabel}</div>
+      <button onclick={goToday} class="text-xs hover:underline" style="color: var(--color-accent)">Today</button>
     </div>
-    <button onclick={nextWeek} class="p-2 rounded-lg hover:bg-gray-200 transition-colors">▶</button>
+    <button onclick={nextWeek} class="p-2 rounded-lg transition-colors hover:opacity-70" style="color: var(--color-text-muted)">▶</button>
+    <button onclick={() => { autoOpen = true; autoError = ''; autoResult = null; }}
+      class="text-sm font-semibold text-white px-3 py-1.5 rounded-xl shadow-sm transition-colors"
+      style="background: var(--color-accent)">✨ Auto</button>
   </div>
 
   {#if loading}
@@ -135,119 +168,122 @@
       <div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div>
     </div>
   {:else}
-    <!-- Desktop grid -->
-    <div class="hidden md:block overflow-x-auto">
-      <table class="w-full border-collapse text-sm">
-        <thead>
-          <tr>
-            <th class="w-24 py-2 text-left text-gray-500 font-medium">Slot</th>
-            {#each weekDays as day}
-              <th class="py-2 px-1 text-center font-medium {toDateString(day) === today ? 'text-green-700' : 'text-gray-700'}">
-                {formatDayShort(day)}
-                {#if toDateString(day) === today}<div class="w-1.5 h-1.5 bg-green-600 rounded-full mx-auto mt-0.5"></div>{/if}
-              </th>
-            {/each}
-          </tr>
-        </thead>
-        <tbody>
-          {#each MEAL_SLOTS as slot}
-            <tr class="border-t border-gray-100">
-              <td class="py-2 pr-2 text-gray-500 font-medium capitalize text-xs">{SLOT_LABELS[slot]}</td>
+      <!-- Desktop grid -->
+      <div class="hidden md:block overflow-x-auto">
+        <table class="w-full border-collapse text-sm">
+          <thead>
+            <tr>
+              <th class="w-24 py-2 text-left font-medium" style="color: var(--color-text-muted)">Slot</th>
               {#each weekDays as day}
-                {@const dateStr = toDateString(day)}
-                {@const plan = planMap.get(`${dateStr}::${slot}`)}
-                <td class="py-1 px-1">
-                  {#if plan?.mealName}
-                    <div class="bg-green-50 border border-green-200 rounded-lg p-2 relative group">
-                      <a href="/meals/{plan.mealId}" class="block">
-                        <div class="font-medium text-green-900 text-xs leading-tight">{plan.mealName}</div>
-                        {#if plan.mealDifficulty}
-                          <span class="inline-block text-xs px-1.5 py-0.5 rounded mt-1 {DIFFICULTY_COLORS[plan.mealDifficulty]}">{plan.mealDifficulty}</span>
-                        {/if}
-                        {#if plan.assignedByDisplayName}
-                          <div class="text-xs text-gray-400 mt-0.5">{plan.assignedByDisplayName}</div>
-                        {/if}
-                      </a>
-                      <button onclick={() => clearSlot(dateStr, slot)} class="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 text-xs transition-opacity">✕</button>
-                    </div>
-                  {:else}
-                    <button onclick={() => openPicker(dateStr, slot)}
-                      class="w-full h-14 border-2 border-dashed border-gray-200 rounded-lg text-gray-400 hover:border-green-400 hover:text-green-600 transition-colors text-xl">
-                      +
-                    </button>
-                  {/if}
-                </td>
+                <th class="py-2 px-1 text-center font-medium" style="color: {toDateString(day) === today ? 'var(--color-accent)' : 'var(--color-text)'}">
+                  {formatDayShort(day)}
+                  {#if toDateString(day) === today}<div class="w-1.5 h-1.5 rounded-full mx-auto mt-0.5" style="background: var(--color-accent)"></div>{/if}
+                </th>
               {/each}
             </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-
-    <!-- Mobile list -->
-    <div class="md:hidden space-y-4">
-      {#each weekDays as day}
-        {@const dateStr = toDateString(day)}
-        <div class="bg-white rounded-xl shadow-sm overflow-hidden">
-          <div class="px-4 py-2 bg-gray-50 border-b font-semibold text-sm {dateStr === today ? 'text-green-700' : 'text-gray-700'}">
-            {formatDayShort(day)}{dateStr === today ? ' · Today' : ''}
-          </div>
-          <div class="divide-y divide-gray-50">
+          </thead>
+          <tbody>
             {#each MEAL_SLOTS as slot}
-              {@const plan = planMap.get(`${dateStr}::${slot}`)}
-              <div class="px-4 py-2 flex items-center gap-3">
-                <span class="text-xs text-gray-400 w-16 shrink-0">{SLOT_LABELS[slot]}</span>
-                {#if plan?.mealName}
-                  <a href="/meals/{plan.mealId}" class="flex-1 text-sm text-green-900 font-medium">{plan.mealName}</a>
-                  <button onclick={() => clearSlot(dateStr, slot)} class="text-gray-300 hover:text-red-400 text-sm">✕</button>
-                {:else}
-                  <button onclick={() => openPicker(dateStr, slot)} class="flex-1 text-sm text-gray-400 hover:text-green-600 text-left">+ Add meal</button>
-                {/if}
-              </div>
+              <tr class="border-t" style="border-color: var(--color-border)">
+                <td class="py-2 pr-2 font-medium capitalize text-xs" style="color: var(--color-text-muted)">{SLOT_LABELS[slot]}</td>
+                {#each weekDays as day}
+                  {@const dateStr = toDateString(day)}
+                  {@const plan = planMap.get(`${dateStr}::${slot}`)}
+                  <td class="py-1 px-1">
+                    {#if plan?.mealName}
+                      <div class="rounded-lg p-2 relative group" style="background: var(--color-accent-light); border: 1px solid var(--color-accent)">
+                        <a href="/meals/{plan.mealId}" class="block">
+                          <div class="font-medium text-xs leading-tight" style="color: var(--color-accent-text)">{plan.mealName}</div>
+                          {#if plan.mealDifficulty}
+                            <span class="inline-block text-xs px-1.5 py-0.5 rounded mt-1 {DIFFICULTY_COLORS[plan.mealDifficulty]}">{plan.mealDifficulty}</span>
+                          {/if}
+                        </a>
+                        <div class="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onclick={() => openPicker(dateStr, slot)} class="text-xs" style="color: var(--color-accent)" title="Swap">⇄</button>
+                          <button onclick={() => clearSlot(dateStr, slot)} class="text-xs" style="color: var(--color-text-muted)" title="Remove">✕</button>
+                        </div>
+                      </div>
+                    {:else}
+                      <button onclick={() => openPicker(dateStr, slot)}
+                        class="w-full h-14 border-2 border-dashed rounded-lg text-xl transition-colors"
+                        style="border-color: var(--color-border); color: var(--color-text-muted)">
+                        +
+                      </button>
+                    {/if}
+                  </td>
+                {/each}
+              </tr>
             {/each}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Mobile list -->
+      <div class="md:hidden space-y-4">
+        {#each weekDays as day}
+          {@const dateStr = toDateString(day)}
+          <div class="rounded-xl shadow-sm overflow-hidden" style="background: var(--color-surface); border: 1px solid var(--color-border)">
+            <div class="px-4 py-2 border-b font-semibold text-sm" style="background: var(--color-bg); border-color: var(--color-border); color: {dateStr === today ? 'var(--color-accent)' : 'var(--color-text)'}">
+              {formatDayShort(day)}{dateStr === today ? ' · Today' : ''}
+            </div>
+            <div class="divide-y" style="border-color: var(--color-border)">
+              {#each MEAL_SLOTS as slot}
+                {@const plan = planMap.get(`${dateStr}::${slot}`)}
+                <div class="px-4 py-2 flex items-center gap-3">
+                  <span class="text-xs w-16 shrink-0" style="color: var(--color-text-muted)">{SLOT_LABELS[slot]}</span>
+                  {#if plan?.mealName}
+                    <a href="/meals/{plan.mealId}" class="flex-1 text-sm font-medium" style="color: var(--color-accent-text)">{plan.mealName}</a>
+                    <button onclick={() => openPicker(dateStr, slot)} class="text-xs" style="color: var(--color-text-muted)" title="Swap">⇄</button>
+                    <button onclick={() => clearSlot(dateStr, slot)} class="text-sm" style="color: var(--color-text-muted)">✕</button>
+                  {:else}
+                    <button onclick={() => openPicker(dateStr, slot)} class="flex-1 text-sm text-left" style="color: var(--color-text-muted)">+ Add meal</button>
+                  {/if}
+                </div>
+              {/each}
+            </div>
           </div>
-        </div>
-      {/each}
-    </div>
+        {/each}
+      </div>
   {/if}
 </div>
 
 <!-- Meal Picker Bottom Sheet -->
 {#if pickerOpen}
   <div class="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onclick={(e) => { if (e.target === e.currentTarget) pickerOpen = false; }} role="presentation">
-    <div class="bg-white rounded-t-2xl max-h-[90vh] flex flex-col shadow-2xl">
+    <div class="rounded-t-2xl max-h-[90vh] flex flex-col shadow-2xl" style="background: var(--color-surface)">
 
       <!-- Header -->
-      <div class="flex items-center justify-between px-4 pt-4 pb-2 border-b shrink-0">
+      <div class="flex items-center justify-between px-4 pt-4 pb-2 border-b shrink-0" style="border-color: var(--color-border)">
         <div>
-          <div class="font-semibold text-gray-800">Pick a meal</div>
-          <div class="text-xs text-gray-500">{pickerDate} · {SLOT_LABELS[pickerSlot]}</div>
+          <div class="font-semibold" style="color: var(--color-text)">Pick a meal</div>
+          <div class="text-xs" style="color: var(--color-text-muted)">{pickerDate} · {SLOT_LABELS[pickerSlot]}</div>
         </div>
-        <button onclick={() => pickerOpen = false} class="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+        <button onclick={() => pickerOpen = false} class="text-xl leading-none" style="color: var(--color-text-muted)">✕</button>
       </div>
 
       <!-- Search + filter toggle -->
-      <div class="px-4 py-2 border-b shrink-0 flex gap-2">
+      <div class="px-4 py-2 border-b shrink-0 flex gap-2" style="border-color: var(--color-border)">
         <input type="search" bind:value={mealSearch} oninput={onSearchInput} placeholder="Search meals…"
-          class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
+          class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+          style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)" />
         <button onclick={() => filterOpen = !filterOpen}
-          class="relative p-2 rounded-lg border {activeFilterCount > 0 ? 'border-green-500 text-green-700' : 'border-gray-200 text-gray-500'} hover:bg-gray-50">
+          class="relative p-2 rounded-lg border transition-colors"
+          style="border-color: {activeFilterCount > 0 ? 'var(--color-accent)' : 'var(--color-border)'}; color: {activeFilterCount > 0 ? 'var(--color-accent)' : 'var(--color-text-muted)'}">
           ⚙️
           {#if activeFilterCount > 0}
-            <span class="absolute -top-1 -right-1 bg-green-600 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center">{activeFilterCount}</span>
+            <span class="absolute -top-1 -right-1 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center" style="background: var(--color-accent)">{activeFilterCount}</span>
           {/if}
         </button>
       </div>
 
       <!-- Filter panel -->
       {#if filterOpen}
-        <div class="px-4 py-3 border-b bg-gray-50 shrink-0 space-y-3">
-          <!-- Dietary types -->
+        <div class="px-4 py-3 border-b shrink-0 space-y-3" style="background: var(--color-bg); border-color: var(--color-border)">
           <div class="flex flex-wrap gap-1.5">
             {#each dietaryTypes as dt}
               <button onclick={() => { toggleDietary(dt.id); loadPickerMeals(); }}
-                class="text-xs px-2.5 py-1 rounded-full border transition-colors
-                  {filterDietaryIds.includes(dt.id) ? 'bg-green-600 text-white border-green-600' : 'border-gray-200 text-gray-600 hover:border-green-400'}">
+                class="text-xs px-2.5 py-1 rounded-full border transition-colors"
+                style="{filterDietaryIds.includes(dt.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}">
                 {dt.icon ?? ''} {dt.name}
               </button>
             {/each}
@@ -255,21 +291,23 @@
 
           <div class="grid grid-cols-2 gap-2">
             <select bind:value={filterDifficulty} onchange={loadPickerMeals}
-              class="border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+              class="border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">
               <option value="">Any difficulty</option>
               <option value="easy">Easy</option>
               <option value="medium">Medium</option>
               <option value="hard">Hard</option>
             </select>
             <select bind:value={filterCuisineId} onchange={loadPickerMeals}
-              class="border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+              class="border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">
               <option value={null}>Any cuisine</option>
               {#each cuisines as c}<option value={c.id}>{c.name}</option>{/each}
             </select>
           </div>
 
           <div>
-            <label class="text-xs text-gray-500 block mb-1">
+            <label class="text-xs block mb-1" style="color: var(--color-text-muted)">
               Max prep time{filterPrepTimeMax ? ` · ${filterPrepTimeMax} min` : ''}
             </label>
             <input type="range" min="5" max="120" step="5" bind:value={filterPrepTimeMax} onchange={loadPickerMeals}
@@ -278,16 +316,13 @@
 
           <div class="flex gap-2">
             <button onclick={() => { filterIsTested = filterIsTested === true ? null : true; loadPickerMeals(); }}
-              class="text-xs px-2.5 py-1 rounded-full border {filterIsTested === true ? 'bg-green-600 text-white border-green-600' : 'border-gray-200 text-gray-600'}">
+              class="text-xs px-2.5 py-1 rounded-full border transition-colors"
+              style="{filterIsTested === true ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}">
               ✅ Tested only
-            </button>
-            <button onclick={() => { filterIsTested = filterIsTested === false ? null : false; loadPickerMeals(); }}
-              class="text-xs px-2.5 py-1 rounded-full border {filterIsTested === false ? 'bg-amber-500 text-white border-amber-500' : 'border-gray-200 text-gray-600'}">
-              🧪 Untested only
             </button>
             {#if activeFilterCount > 0}
               <button onclick={() => { filterDietaryIds = []; filterCuisineId = null; filterDifficulty = ''; filterPrepTimeMax = null; filterIsTested = null; loadPickerMeals(); }}
-                class="text-xs text-gray-400 hover:text-red-500 ml-auto underline">Clear</button>
+                class="text-xs ml-auto underline" style="color: var(--color-text-muted)">Clear</button>
             {/if}
           </div>
         </div>
@@ -298,27 +333,79 @@
         {#if pickerLoading}
           <div class="flex justify-center py-8"><div class="animate-spin rounded-full h-7 w-7 border-4 border-green-600 border-t-transparent"></div></div>
         {:else if allMeals.length === 0}
-          <p class="text-center text-gray-400 py-8 text-sm">No meals found. <a href="/meals/new" class="text-green-700 underline">Add one?</a></p>
+          <p class="text-center py-8 text-sm" style="color: var(--color-text-muted)">No meals found. <a href="/meals/new" class="underline" style="color: var(--color-accent)">Add one?</a></p>
         {:else}
-          <div class="px-4 py-1 text-xs text-gray-400">{allMeals.length} meal{allMeals.length === 1 ? '' : 's'}</div>
+          <div class="px-4 py-1 text-xs" style="color: var(--color-text-muted)">{allMeals.length} meal{allMeals.length === 1 ? '' : 's'}</div>
           {#each allMeals as meal}
             <button onclick={() => assignMeal(meal)}
-              class="w-full flex items-start gap-3 px-4 py-3 hover:bg-green-50 transition-colors text-left border-b border-gray-50">
+              class="w-full flex items-start gap-3 px-4 py-3 transition-colors text-left border-b"
+              style="border-color: var(--color-border)">
               <div class="flex-1">
-                <div class="font-medium text-gray-800 text-sm">{meal.name}</div>
+                <div class="font-medium text-sm flex items-center gap-1" style="color: var(--color-text)">
+                  {meal.name}
+                  {#if meal.isFavourite}<span class="text-xs">⭐</span>{/if}
+                </div>
                 <div class="flex gap-2 mt-0.5 flex-wrap">
-                  <span class="text-xs text-gray-400">⏱ {meal.prepTimeMinutes + meal.cookTimeMinutes} min</span>
+                  <span class="text-xs" style="color: var(--color-text-muted)">⏱ {meal.prepTimeMinutes + meal.cookTimeMinutes} min</span>
                   <span class="text-xs px-1.5 rounded {DIFFICULTY_COLORS[meal.difficulty]}">{meal.difficulty}</span>
+                  {#if (meal as any).leftoverBehaviour && (meal as any).leftoverBehaviour !== 'consumed_same'}
+                    <span class="text-xs">{(meal as any).leftoverBehaviour === 'freezable' ? '❄️' : '🥡'}</span>
+                  {/if}
                   {#each (meal.dietaryTypes || []).slice(0, 3) as dt}
-                    <span class="text-xs text-gray-400">{dt.icon ?? ''} {dt.name}</span>
+                    <span class="text-xs" style="color: var(--color-text-muted)">{dt.icon ?? ''} {dt.name}</span>
                   {/each}
-                  {#if !meal.isTested}<span class="text-xs text-amber-600">🧪</span>{/if}
                 </div>
               </div>
             </button>
           {/each}
         {/if}
       </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Auto-Generate Modal -->
+{#if autoOpen}
+  <div class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4" onclick={(e) => { if (e.target === e.currentTarget) autoOpen = false; }} role="presentation">
+    <div class="w-full max-w-md rounded-2xl p-5 shadow-2xl space-y-4" style="background: var(--color-surface)">
+      <div class="flex items-center justify-between">
+        <h2 class="font-bold text-base" style="color: var(--color-text)">✨ Auto-generate week</h2>
+        <button onclick={() => autoOpen = false} class="text-xl leading-none" style="color: var(--color-text-muted)">✕</button>
+      </div>
+
+      <p class="text-sm" style="color: var(--color-text-muted)">
+        The planner will suggest meals from your library for each empty slot this week, respecting your weekly rules.
+      </p>
+
+      <div class="space-y-3">
+        <div>
+          <label class="text-sm font-medium block mb-1" style="color: var(--color-text)">
+            Max total time per slot {autoPrepLimit ? `· ${autoPrepLimit} min` : '(no limit)'}
+          </label>
+          <input type="range" min="15" max="180" step="15" bind:value={autoPrepLimit} class="w-full accent-green-600" />
+          <button onclick={() => autoPrepLimit = null} class="text-xs underline mt-1" style="color: var(--color-text-muted)">No limit</button>
+        </div>
+
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" bind:checked={autoLeftovers} class="w-4 h-4 accent-green-600" />
+          <span class="text-sm" style="color: var(--color-text)">🥡 Prefer meals with leftovers (for next-day lunches)</span>
+        </label>
+
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" bind:checked={autoOverwrite} class="w-4 h-4 accent-green-600" />
+          <span class="text-sm" style="color: var(--color-text)">Overwrite existing planned meals</span>
+        </label>
+      </div>
+
+      {#if autoError}
+        <div class="text-sm rounded-lg p-2" style="background: var(--color-danger-light); color: var(--color-danger)">{autoError}</div>
+      {/if}
+
+      <button onclick={autoGenerate} disabled={autoLoading}
+        class="w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-60"
+        style="background: var(--color-accent)">
+        {autoLoading ? 'Generating…' : 'Generate Week'}
+      </button>
     </div>
   </div>
 {/if}

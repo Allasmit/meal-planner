@@ -6,6 +6,7 @@ import { usersRouter } from './routes/users';
 import { mealsRouter } from './routes/meals';
 import { plannerRouter } from './routes/planner';
 import { importRouter } from './routes/import';
+import { familyRouter } from './routes/family';
 // Run migrations on startup
 import './db/migrate';
 
@@ -29,7 +30,8 @@ app.use('/api/auth', authRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/meals', mealsRouter);
 app.use('/api/planner', plannerRouter);
-app.use('/api/import', importRouter);   // ← add this
+app.use('/api/import', importRouter);
+app.use('/api/family', familyRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => res.json({ ok: true }));

@@ -83,4 +83,22 @@ export const api = {
     request('/import/csv', { method: 'POST', body: JSON.stringify({ csvText }) }),
   importParseHtml: (html: string, sourceUrl: string) =>
     request('/import/parse-html', { method: 'POST', body: JSON.stringify({ html, sourceUrl }) }),
+
+  // Family
+  getFamilyMembers: () => request('/family'),
+  createFamilyMember: (body: object) =>
+    request('/family', { method: 'POST', body: JSON.stringify(body) }),
+  updateFamilyMember: (id: number, body: object) =>
+    request(`/family/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteFamilyMember: (id: number) => request(`/family/${id}`, { method: 'DELETE' }),
+
+  // Planner rules & settings
+  getPlannerRules: () => request('/planner/rules'),
+  updatePlannerRule: (id: number, body: object) =>
+    request(`/planner/rules/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  getPlannerSettings: () => request('/planner/settings'),
+  updatePlannerSettings: (body: object) =>
+    request('/planner/settings', { method: 'PATCH', body: JSON.stringify(body) }),
+  autoGenerateWeek: (body: object) =>
+    request('/planner/auto-generate', { method: 'POST', body: JSON.stringify(body) }),
 };

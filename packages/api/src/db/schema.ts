@@ -62,6 +62,20 @@ export const meals = sqliteTable('meals', {
   imageUrl: text('image_url'),
   isTested: integer('is_tested', { mode: 'boolean' }).notNull().default(false),
   notes: text('notes'),
+  // ─── Enhanced fields ─────────────────────────────────────────────────────────
+  cost: real('cost'),
+  proteinType: text('protein_type', {
+    enum: ['chicken', 'red_meat', 'pork', 'fish', 'vegetarian', 'vegan', 'other'],
+  }),
+  mealCategory: text('meal_category', {
+    enum: ['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack'],
+  }),
+  leftoverBehaviour: text('leftover_behaviour', {
+    enum: ['consumed_same', 'fridge_next_day', 'freezable'],
+  }).notNull().default('consumed_same'),
+  sourceUrl: text('source_url'),
+  isFavourite: integer('is_favourite', { mode: 'boolean' }).notNull().default(false),
+  isSpecialOccasion: integer('is_special_occasion', { mode: 'boolean' }).notNull().default(false),
   createdByUserId: integer('created_by_user_id').references(() => users.id),
   updatedByUserId: integer('updated_by_user_id').references(() => users.id),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
@@ -103,6 +117,8 @@ export const mealPlans = sqliteTable(
     mealId: integer('meal_id').references(() => meals.id, { onDelete: 'set null' }),
     servings: integer('servings').notNull().default(2),
     notes: text('notes'),
+    leftoversRequired: integer('leftovers_required', { mode: 'boolean' }).notNull().default(false),
+    prepTimeLimitMinutes: integer('prep_time_limit_minutes'),
     assignedByUserId: integer('assigned_by_user_id').references(() => users.id),
     updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
   },
@@ -114,6 +130,47 @@ export const mealPlans = sqliteTable(
 export const userSettings = sqliteTable('user_settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
+});
+
+// ─── Family Members ───────────────────────────────────────────────────────────
+
+export const familyMembers = sqliteTable('family_members', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  role: text('role', { enum: ['Adult', 'Teen', 'Child'] }).notNull().default('Adult'),
+  notes: text('notes'),
+});
+
+export const familyMemberDietaryTypes = sqliteTable(
+  'family_member_dietary_types',
+  {
+    familyMemberId: integer('family_member_id').notNull().references(() => familyMembers.id, { onDelete: 'cascade' }),
+    dietaryTypeId: integer('dietary_type_id').notNull().references(() => dietaryTypes.id, { onDelete: 'cascade' }),
+  },
+  (t) => [uniqueIndex('family_member_dietary_unique').on(t.familyMemberId, t.dietaryTypeId)],
+);
+
+// ─── Meal ↔ Family Members (who can eat this meal) ────────────────────────────
+
+export const mealSuitableFor = sqliteTable(
+  'meal_suitable_for',
+  {
+    mealId: integer('meal_id').notNull().references(() => meals.id, { onDelete: 'cascade' }),
+    familyMemberId: integer('family_member_id').notNull().references(() => familyMembers.id, { onDelete: 'cascade' }),
+  },
+  (t) => [uniqueIndex('meal_suitable_unique').on(t.mealId, t.familyMemberId)],
+);
+
+// ─── Weekly Planner Rules ─────────────────────────────────────────────────────
+
+export const weeklyRules = sqliteTable('weekly_rules', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  label: text('label').notNull(),
+  ruleType: text('rule_type', {
+    enum: ['max_protein_per_week', 'max_category_per_week', 'default_leftovers_days', 'batch_cooking_day'],
+  }).notNull(),
+  value: text('value').notNull(), // JSON: { protein?, category?, days?, maxCount?, dayOfWeek? }
+  isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(true),
 });
 
 // ─── Relations ────────────────────────────────────────────────────────────────
@@ -138,6 +195,7 @@ export const mealsRelations = relations(meals, ({ one, many }) => ({
   mealDietaryTypes: many(mealDietaryTypes),
   mealIngredients: many(mealIngredients),
   mealPlans: many(mealPlans),
+  suitableFor: many(mealSuitableFor),
 }));
 
 export const mealDietaryTypesRelations = relations(mealDietaryTypes, ({ one }) => ({
@@ -158,4 +216,19 @@ export const ingredientsRelations = relations(ingredients, ({ one, many }) => ({
 export const mealPlansRelations = relations(mealPlans, ({ one }) => ({
   meal: one(meals, { fields: [mealPlans.mealId], references: [meals.id] }),
   assignedBy: one(users, { fields: [mealPlans.assignedByUserId], references: [users.id] }),
+}));
+
+export const familyMembersRelations = relations(familyMembers, ({ many }) => ({
+  dietaryTypes: many(familyMemberDietaryTypes),
+  suitableForMeals: many(mealSuitableFor),
+}));
+
+export const familyMemberDietaryTypesRelations = relations(familyMemberDietaryTypes, ({ one }) => ({
+  familyMember: one(familyMembers, { fields: [familyMemberDietaryTypes.familyMemberId], references: [familyMembers.id] }),
+  dietaryType: one(dietaryTypes, { fields: [familyMemberDietaryTypes.dietaryTypeId], references: [dietaryTypes.id] }),
+}));
+
+export const mealSuitableForRelations = relations(mealSuitableFor, ({ one }) => ({
+  meal: one(meals, { fields: [mealSuitableFor.mealId], references: [meals.id] }),
+  familyMember: one(familyMembers, { fields: [mealSuitableFor.familyMemberId], references: [familyMembers.id] }),
 }));

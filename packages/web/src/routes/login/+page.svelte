@@ -7,9 +7,6 @@
   let password = $state('');
   let error = $state('');
   let loading = $state(false);
-  let urlLoading = $state(false);
-  let urlError = $state('');
-  let urlResult = $state<{ id: number; name: string; ingredientCount: number } | null>(null);
 
   async function handleLogin() {
     error = '';
@@ -22,23 +19,6 @@
       error = e.message || 'Login failed';
     } finally {
       loading = false;
-    }
-  }
-
-  async function importFromUrl() {
-    urlError = ''; urlResult = null; urlLoading = true;
-    try {
-      // Use allorigins.win as a CORS proxy — browser fetches, not server
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-      const res = await fetch(proxyUrl);
-      if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
-      const data = await res.json();
-      if (!data.contents) throw new Error('No content returned from proxy');
-      urlResult = await api.importParseHtml(data.contents, url) as any;
-    } catch (e: any) {
-      urlError = e.message;
-    } finally {
-      urlLoading = false;
     }
   }
 </script>
@@ -89,28 +69,5 @@
         {loading ? 'Signing in…' : 'Sign In'}
       </button>
     </form>
-
-    <div class="mt-6">
-      <h2 class="text-xl font-bold text-gray-800">Import from URL</h2>
-      <input
-        type="text"
-        bind:value={url}
-        placeholder="https://example.com"
-        class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
-      />
-      <button
-        type="button"
-        disabled={urlLoading}
-        class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2.5 rounded-lg transition-colors disabled:opacity-60"
-      >
-        {urlLoading ? 'Importing…' : 'Import'}
-      </button>
-      {#if urlError}
-        <p class="text-red-600 text-sm bg-red-50 rounded-lg px-3 py-2">{urlError}</p>
-      {/if}
-      {#if urlResult}
-        <p class="text-green-600 text-sm bg-green-50 rounded-lg px-3 py-2">{urlResult.name} ({urlResult.ingredientCount} ingredients)</p>
-      {/if}
-    </div>
   </div>
 </div>

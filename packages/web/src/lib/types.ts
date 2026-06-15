@@ -31,6 +31,9 @@ export interface Ingredient {
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+export type ProteinType = 'chicken' | 'red_meat' | 'pork' | 'fish' | 'vegetarian' | 'vegan' | 'other';
+export type MealCategory = 'dinner' | 'breakfast' | 'lunch' | 'baking' | 'treat' | 'snack';
+export type LeftoverBehaviour = 'consumed_same' | 'fridge_next_day' | 'freezable';
 
 export interface MealIngredientEntry {
   id: number;
@@ -53,6 +56,13 @@ export interface Meal {
   imageUrl: string | null;
   isTested: boolean;
   notes: string | null;
+  cost: number | null;
+  proteinType: ProteinType | null;
+  mealCategory: MealCategory | null;
+  leftoverBehaviour: LeftoverBehaviour;
+  sourceUrl: string | null;
+  isFavourite: boolean;
+  isSpecialOccasion: boolean;
   createdByUserId: number | null;
   createdAt: string;
   updatedAt: string;
@@ -98,8 +108,16 @@ export interface MealFormData {
   instructions: string[];
   imageUrl: string;
   isTested: boolean;
+  cost: number | null;
+  proteinType: ProteinType | null;
+  mealCategory: MealCategory | null;
+  leftoverBehaviour: LeftoverBehaviour;
+  sourceUrl: string;
+  isFavourite: boolean;
+  isSpecialOccasion: boolean;
   notes: string;
   dietaryTypeIds: number[];
+  suitableForMemberIds: number[];
   ingredients: {
     ingredientId: number;
     quantity: number;
@@ -116,4 +134,32 @@ export interface MealFilters {
   prepTimeMax: number | null;
   ingredientIds: number[];
   isTested: boolean | null;
+  proteinType: ProteinType | '';
+  mealCategory: MealCategory | '';
+  leftoverBehaviour: LeftoverBehaviour | '';
+  isFavourite: boolean | null;
+  isSpecialOccasion: boolean | null;
+  maxCost: number | null;
+  suitableForMemberIds: number[];
+}
+
+export interface FamilyMember {
+  id: number;
+  name: string;
+  role: 'Adult' | 'Teen' | 'Child';
+  notes: string | null;
+  dietaryTypes: DietaryType[];
+}
+
+export interface PlannerRule {
+  id: number;
+  label: string;
+  ruleType: 'max_protein_per_week' | 'max_category_per_week' | 'default_leftovers_days' | 'batch_cooking_day';
+  value: string;
+  isEnabled: boolean;
+}
+
+export interface PlannerSettings {
+  monthlyBudget: number | null;
+  batchCookingDay: number;
 }

@@ -5,6 +5,7 @@ import {
   meals,
   mealDietaryTypes,
   mealIngredients,
+  mealSuitableFor,
   ingredients,
   ingredientCategories,
   dietaryTypes,
@@ -70,7 +71,9 @@ mealsRouter.post('/ingredients', async (req: AuthRequest, res: Response): Promis
 // â”€â”€â”€ Meals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
-  const { search, dietaryTypeIds, cuisineId, difficulty, prepTimeMax, ingredientIds, isTested } = req.query;
+  const { search, dietaryTypeIds, cuisineId, difficulty, prepTimeMax, ingredientIds, isTested,
+    proteinType, mealCategory, leftoverBehaviour, isFavourite, isSpecialOccasion,
+    maxCost, suitableForMemberIds } = req.query;
 
   const conditions: any[] = [];
   if (search) conditions.push(like(meals.name, `%${search}%`));
@@ -78,6 +81,12 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
   if (difficulty) conditions.push(eq(meals.difficulty, difficulty as string));
   if (prepTimeMax) conditions.push(lte(meals.prepTimeMinutes, parseInt(prepTimeMax as string, 10)));
   if (isTested !== undefined) conditions.push(eq(meals.isTested, isTested === 'true'));
+  if (proteinType) conditions.push(eq(meals.proteinType, proteinType as string));
+  if (mealCategory) conditions.push(eq(meals.mealCategory, mealCategory as string));
+  if (leftoverBehaviour) conditions.push(eq(meals.leftoverBehaviour, leftoverBehaviour as string));
+  if (isFavourite !== undefined) conditions.push(eq(meals.isFavourite, isFavourite === 'true'));
+  if (isSpecialOccasion !== undefined) conditions.push(eq(meals.isSpecialOccasion, isSpecialOccasion === 'true'));
+  if (maxCost) conditions.push(lte(meals.cost, parseFloat(maxCost as string)));
 
   const mealRows = conditions.length > 0
     ? await db.select().from(meals).where(and(...conditions))
@@ -131,6 +140,22 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
     );
   }
 
+  if (suitableForMemberIds) {
+    const memberIds = (suitableForMemberIds as string).split(',').map(Number);
+    const suitableRows = await db
+      .select({ mealId: mealSuitableFor.mealId, familyMemberId: mealSuitableFor.familyMemberId })
+      .from(mealSuitableFor)
+      .where(inArray(mealSuitableFor.mealId, [...filteredIds]));
+    filteredIds = new Set(
+      [...filteredIds].filter((id) => {
+        const suited = suitableRows.filter((r) => r.mealId === id).map((r) => r.familyMemberId);
+        // If a meal has no suitableFor entries, it's considered suitable for everyone
+        if (suited.length === 0) return true;
+        return memberIds.every((mid) => suited.includes(mid));
+      }),
+    );
+  }
+
   const result = mealRows
     .filter((m) => filteredIds.has(m.id))
     .map((m) => ({
@@ -174,7 +199,16 @@ const mealSchema = z.object({
   imageUrl: z.string().url().optional().nullable().or(z.literal('')).transform(v => v === '' ? null : v),
   isTested: z.boolean().default(false),
   notes: z.string().optional().nullable(),
+  // Enhanced fields
+  cost: z.number().min(0).optional().nullable(),
+  proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'vegetarian', 'vegan', 'other']).optional().nullable(),
+  mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
+  leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).default('consumed_same'),
+  sourceUrl: z.string().url().optional().nullable().or(z.literal('')).transform(v => v === '' ? null : v),
+  isFavourite: z.boolean().default(false),
+  isSpecialOccasion: z.boolean().default(false),
   dietaryTypeIds: z.array(z.number().int()).default([]),
+  suitableForMemberIds: z.array(z.number().int()).default([]),
   ingredients: z.array(z.object({
     ingredientId: z.number().int(),
     quantity: z.number().positive(),
@@ -187,11 +221,14 @@ mealsRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> => 
   const parsed = mealSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  const { dietaryTypeIds, ingredients: ingList, instructions, ...mealData } = parsed.data;
+  const { dietaryTypeIds, suitableForMemberIds, ingredients: ingList, instructions, ...mealData } = parsed.data;
   const [meal] = await db.insert(meals).values({ ...mealData, instructions: JSON.stringify(instructions), createdByUserId: req.user!.userId, updatedByUserId: req.user!.userId }).returning();
 
   if (dietaryTypeIds.length > 0) {
     await db.insert(mealDietaryTypes).values(dietaryTypeIds.map((dtId) => ({ mealId: meal.id, dietaryTypeId: dtId })));
+  }
+  if (suitableForMemberIds.length > 0) {
+    await db.insert(mealSuitableFor).values(suitableForMemberIds.map((mid) => ({ mealId: meal.id, familyMemberId: mid })));
   }
   if (ingList.length > 0) {
     await db.insert(mealIngredients).values(ingList.map((i) => ({ ...i, mealId: meal.id })));
@@ -205,7 +242,7 @@ mealsRouter.put('/:id', async (req: AuthRequest, res: Response): Promise<void> =
   const parsed = mealSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  const { dietaryTypeIds, ingredients: ingList, instructions, ...mealData } = parsed.data;
+  const { dietaryTypeIds, suitableForMemberIds, ingredients: ingList, instructions, ...mealData } = parsed.data;
   const [updated] = await db.update(meals).set({ ...mealData, instructions: JSON.stringify(instructions), updatedByUserId: req.user!.userId, updatedAt: new Date().toISOString() }).where(eq(meals.id, id)).returning();
 
   if (!updated) { res.status(404).json({ error: 'Meal not found' }); return; }
@@ -213,6 +250,11 @@ mealsRouter.put('/:id', async (req: AuthRequest, res: Response): Promise<void> =
   await db.delete(mealDietaryTypes).where(eq(mealDietaryTypes.mealId, id));
   if (dietaryTypeIds.length > 0) {
     await db.insert(mealDietaryTypes).values(dietaryTypeIds.map((dtId) => ({ mealId: id, dietaryTypeId: dtId })));
+  }
+
+  await db.delete(mealSuitableFor).where(eq(mealSuitableFor.mealId, id));
+  if (suitableForMemberIds.length > 0) {
+    await db.insert(mealSuitableFor).values(suitableForMemberIds.map((mid) => ({ mealId: id, familyMemberId: mid })));
   }
 
   await db.delete(mealIngredients).where(eq(mealIngredients.mealId, id));

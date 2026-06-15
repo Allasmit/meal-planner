@@ -1,1 +1,76 @@
 @import "tailwindcss";
+
+/* Enable class-based dark mode for Tailwind v4 dark: utilities */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ─── CSS custom properties for theming ─────────────────────────────────────── */
+:root {
+  --color-bg: #f9fafb;
+  --color-surface: #ffffff;
+  --color-border: #e5e7eb;
+  --color-text: #111827;
+  --color-text-muted: #6b7280;
+  --color-accent: #16a34a;
+  --color-accent-hover: #15803d;
+  --color-accent-light: #dcfce7;
+  --color-accent-text: #166534;
+  --color-danger: #dc2626;
+  --color-danger-light: #fee2e2;
+  --color-nav-bg: #ffffff;
+  --color-header-bg: #15803d;
+}
+
+.dark {
+  --color-bg: #0f172a;
+  --color-surface: #1e293b;
+  --color-border: #334155;
+  --color-text: #f1f5f9;
+  --color-text-muted: #94a3b8;
+  --color-accent: #22c55e;
+  --color-accent-hover: #16a34a;
+  --color-accent-light: #14532d;
+  --color-accent-text: #86efac;
+  --color-danger: #f87171;
+  --color-danger-light: #450a0a;
+  --color-nav-bg: #1e293b;
+  --color-header-bg: #14532d;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  transition: background-color 0.2s, color 0.2s;
+}
+
+/* ─── Dark mode overrides for legacy Tailwind utilities ─────────────────────── */
+/* Covers components that still use hardcoded bg-white / text-gray-* classes    */
+
+.dark .bg-white        { background-color: var(--color-surface) !important; }
+.dark .bg-gray-50      { background-color: var(--color-bg) !important; }
+.dark .bg-gray-100     { background-color: var(--color-border) !important; }
+.dark .bg-green-50     { background-color: var(--color-accent-light) !important; }
+
+.dark .text-gray-800   { color: var(--color-text) !important; }
+.dark .text-gray-700   { color: var(--color-text) !important; }
+.dark .text-gray-600   { color: var(--color-text-muted) !important; }
+.dark .text-gray-500   { color: var(--color-text-muted) !important; }
+.dark .text-gray-400   { color: var(--color-text-muted) !important; }
+.dark .text-green-900  { color: var(--color-accent-text) !important; }
+.dark .text-green-800  { color: var(--color-accent-text) !important; }
+.dark .text-green-700  { color: var(--color-accent) !important; }
+
+.dark .border-gray-200 { border-color: var(--color-border) !important; }
+.dark .border-gray-100 { border-color: var(--color-border) !important; }
+.dark .border-green-200 { border-color: var(--color-accent) !important; }
+
+.dark .divide-gray-50  > * + * { border-color: var(--color-border) !important; }
+.dark .divide-y        > * + * { border-color: var(--color-border) !important; }
+
+/* Input/select resets for dark mode */
+.dark input:not([type=checkbox]):not([type=radio]):not([type=range]),
+.dark select,
+.dark textarea {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
