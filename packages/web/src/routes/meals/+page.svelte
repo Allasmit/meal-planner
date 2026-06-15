@@ -99,12 +99,20 @@
   );
 
   const PROTEIN_LABELS: Record<string, string> = {
-    chicken: '🍗 Chicken', red_meat: '🥩 Red Meat', pork: '🐷 Pork',
-    fish: '🐟 Fish', vegetarian: '🥦 Vegetarian', vegan: '🌱 Vegan', other: '🍲 Other'
+    chicken: '🍗 Chicken',
+    red_meat: '🥩 Red Meat',
+    pork: '🐷 Pork',
+    fish: '🐟 Fish',
+    lamb: '🐑 Lamb',
+    other: '🍲 Other',
   };
   const PROTEIN_COLORS: Record<string, string> = {
-    chicken: '#f59e0b', red_meat: '#ef4444', pork: '#f97316',
-    fish: '#3b82f6', vegetarian: '#22c55e', vegan: '#10b981', other: '#8b5cf6'
+    chicken: '#f59e0b',
+    red_meat: '#ef4444',
+    pork: '#f97316',
+    fish: '#3b82f6',
+    lamb: '#84cc16',
+    other: '#8b5cf6',
   };
   const CATEGORY_LABELS: Record<string, string> = {
     dinner: '🌙 Dinner', breakfast: '☀️ Breakfast', lunch: '🥪 Lunch',
@@ -289,6 +297,17 @@
         <a href="/meals/{meal.id}"
           class="rounded-xl shadow-sm p-4 hover:shadow-md transition-shadow block relative overflow-hidden"
           style="background: var(--color-surface); border: 1px solid var(--color-border)">
+
+          {#if meal.imageUrl}
+            <div class="mb-3 -mx-4 -mt-4 overflow-hidden rounded-t-xl">
+              <img
+                src={meal.imageUrl}
+                alt={meal.name}
+                class="h-40 w-full object-cover block"
+                loading="lazy"
+              />
+            </div>
+          {/if}
 
           <!-- Protein type colour strip -->
           {#if meal.proteinType}

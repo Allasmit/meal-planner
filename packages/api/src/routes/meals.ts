@@ -32,7 +32,7 @@ mealsRouter.get('/ingredient-categories', async (_req: Request, res: Response): 
   res.json(await db.select().from(ingredientCategories).orderBy(ingredientCategories.sortOrder));
 });
 
-// â”€â”€â”€ Ingredients CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â”€â”€â”€ Ingredients CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 mealsRouter.get('/ingredients', async (req: Request, res: Response): Promise<void> => {
   const search = req.query.search as string | undefined;
@@ -201,7 +201,7 @@ const mealSchema = z.object({
   notes: z.string().optional().nullable(),
   // Enhanced fields
   cost: z.number().min(0).optional().nullable(),
-  proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'vegetarian', 'vegan', 'other']).optional().nullable(),
+  proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']).optional().nullable(),
   mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
   leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).default('consumed_same'),
   sourceUrl: z.string().url().optional().nullable().or(z.literal('')).transform(v => v === '' ? null : v),

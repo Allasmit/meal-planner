@@ -31,7 +31,7 @@ export interface Ingredient {
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snack';
-export type ProteinType = 'chicken' | 'red_meat' | 'pork' | 'fish' | 'vegetarian' | 'vegan' | 'other';
+export type ProteinType = 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'other';
 export type MealCategory = 'dinner' | 'breakfast' | 'lunch' | 'baking' | 'treat' | 'snack';
 export type LeftoverBehaviour = 'consumed_same' | 'fridge_next_day' | 'freezable';
 

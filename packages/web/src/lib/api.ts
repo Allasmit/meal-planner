@@ -1,5 +1,23 @@
 const BASE = '/api';
 
+type MealImportBody = {
+  sourceUrl?: string;
+  cost?: number | null;
+  proteinType?: 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'other' | null;
+  mealCategory?: 'dinner' | 'breakfast' | 'lunch' | 'baking' | 'treat' | 'snack' | null;
+  leftoverBehaviour?: 'consumed_same' | 'fridge_next_day' | 'freezable';
+  isFavourite?: boolean;
+  isSpecialOccasion?: boolean;
+};
+
+type UrlImportBody = MealImportBody & {
+  url: string;
+};
+
+type HtmlImportBody = MealImportBody & {
+  html: string;
+};
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'include',
@@ -77,12 +95,14 @@ export const api = {
     request(`/planner/shopping-list?weekStart=${weekStart}`),
 
   // Import
-  importUrl: (url: string) =>
-    request('/import/url', { method: 'POST', body: JSON.stringify({ url }) }),
+  importUrl: (body: UrlImportBody) =>
+    request('/import/url', { method: 'POST', body: JSON.stringify(body) }),
+
   importCsv: (csvText: string) =>
     request('/import/csv', { method: 'POST', body: JSON.stringify({ csvText }) }),
-  importParseHtml: (html: string, sourceUrl: string) =>
-    request('/import/parse-html', { method: 'POST', body: JSON.stringify({ html, sourceUrl }) }),
+
+  importParseHtml: (body: HtmlImportBody) =>
+    request('/import/parse-html', { method: 'POST', body: JSON.stringify(body) }),
 
   // Family
   getFamilyMembers: () => request('/family'),

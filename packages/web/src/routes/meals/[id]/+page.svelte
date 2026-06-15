@@ -13,8 +13,12 @@
   let id = $derived(parseInt($page.params.id, 10));
 
   const PROTEIN_LABELS: Record<string, string> = {
-    chicken: '🍗 Chicken', red_meat: '🥩 Red Meat', pork: '🐷 Pork',
-    fish: '🐟 Fish', vegetarian: '🥦 Vegetarian', vegan: '🌱 Vegan', other: '🍲 Other',
+    chicken: '🍗 Chicken',
+    red_meat: '🥩 Red Meat',
+    pork: '🐷 Pork',
+    fish: '🐟 Fish',
+    lamb: '🐑 Lamb',
+    other: '🍲 Other',
   };
   const CATEGORY_LABELS: Record<string, string> = {
     dinner: '🌙 Dinner', breakfast: '☀️ Breakfast', lunch: '🥪 Lunch',
@@ -66,6 +70,17 @@
         </button>
       </div>
     </div>
+
+    {#if meal.imageUrl}
+      <div class="overflow-hidden rounded-2xl shadow-sm" style="background: var(--color-surface); border: 1px solid var(--color-border)">
+        <img
+          src={meal.imageUrl}
+          alt={meal.name}
+          class="block w-full max-h-[28rem] object-cover"
+          loading="lazy"
+        />
+      </div>
+    {/if}
 
     <!-- Meta badges -->
     <div class="flex gap-2 flex-wrap">
