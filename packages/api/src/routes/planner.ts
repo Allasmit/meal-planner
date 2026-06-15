@@ -288,17 +288,8 @@ plannerRouter.post('/auto-generate', async (req: AuthRequest, res: Response): Pr
       return true;
     });
 
-    // Soft preference: prefer meals matching the slot's category
-    const slotCategoryMap: Record<string, string> = { breakfast: 'breakfast', lunch: 'lunch', dinner: 'dinner', snack: 'snack' };
-    const slotCategory = slotCategoryMap[day.slot];
-    const slotMatched = candidates.filter((m) => m.mealCategory === slotCategory);
-    if (slotMatched.length > 0) candidates = slotMatched;
-
-    // Soft preference: prefer meals with leftovers if needed; fall back to all if none available
-    if (leftoversNeeded) {
-      const withLeftovers = candidates.filter((m) => m.leftoverBehaviour !== 'consumed_same');
-      if (withLeftovers.length > 0) candidates = withLeftovers;
-    }
+    // No default slot-category filter. Keep the full candidate pool unless the user
+    // explicitly adds preferences.
 
     // Shuffle for variety and pick
     candidates.sort(() => Math.random() - 0.5);
@@ -314,17 +305,32 @@ plannerRouter.post('/auto-generate', async (req: AuthRequest, res: Response): Pr
 
   // Write to planner
   for (const s of suggestions) {
-    const existing = await db.select({ id: mealPlans.id })
+    const existing = await db.select({ id: mealPlans.id, mealId: mealPlans.mealId })
       .from(mealPlans)
       .where(and(eq(mealPlans.planDate, s.date), eq(mealPlans.mealSlot, s.slot as any)))
       .limit(1);
 
     if (existing.length > 0) {
-      if (parsed.data.overwriteExisting) {
-        await db.update(mealPlans).set({ mealId: s.mealId, assignedByUserId: req.user!.userId, updatedAt: new Date().toISOString() }).where(eq(mealPlans.id, existing[0].id));
+      const current = existing[0];
+      const shouldUpdate = parsed.data.overwriteExisting || current.mealId === null;
+
+      if (shouldUpdate) {
+        await db
+          .update(mealPlans)
+          .set({
+            mealId: s.mealId,
+            assignedByUserId: req.user!.userId,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(mealPlans.id, current.id));
       }
     } else {
-      await db.insert(mealPlans).values({ planDate: s.date, mealSlot: s.slot as any, mealId: s.mealId, assignedByUserId: req.user!.userId });
+      await db.insert(mealPlans).values({
+        planDate: s.date,
+        mealSlot: s.slot as any,
+        mealId: s.mealId,
+        assignedByUserId: req.user!.userId,
+      });
     }
   }
 

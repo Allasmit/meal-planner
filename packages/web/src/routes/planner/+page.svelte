@@ -1,38 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
+  import MealBrowser from '$lib/components/MealBrowser.svelte';
   import { getWeekStart, getWeekDays, toDateString, formatDayShort, formatWeekRange, MEAL_SLOTS, SLOT_LABELS, DIFFICULTY_COLORS } from '$lib/utils';
-  import type { MealPlan, Meal, DietaryType, Cuisine } from '$lib/types';
+  import type { MealPlan, Meal } from '$lib/types';
 
   let weekStart = $state(getWeekStart());
   let planMap = $state(new Map<string, MealPlan>());
   let loading = $state(false);
 
-  // Meal picker state
   let pickerOpen = $state(false);
   let pickerDate = $state('');
   let pickerSlot = $state('');
-  let allMeals = $state<Meal[]>([]);
-  let pickerLoading = $state(false);
-  let filterOpen = $state(false);
 
-  // Picker filter state
-  let mealSearch = $state('');
-  let filterDietaryIds = $state<number[]>([]);
-  let filterCuisineId = $state<number | null>(null);
-  let filterDifficulty = $state('');
-  let filterPrepTimeMax = $state<number | null>(null);
-  let filterIsTested = $state<boolean | null>(null);
-
-  // Reference data for filters
-  let dietaryTypes = $state<DietaryType[]>([]);
-  let cuisines = $state<Cuisine[]>([]);
-
-  // Auto-generate state
   let autoOpen = $state(false);
   let autoOverwrite = $state(false);
   let autoPrepLimit = $state<number | null>(null);
-  let autoLeftovers = $state(true);
+  let autoLeftovers = $state(false);
   let autoLoading = $state(false);
   let autoError = $state('');
   let autoResult = $state<{ generated: number } | null>(null);
@@ -84,20 +68,6 @@
     pickerDate = date;
     pickerSlot = slot;
     pickerOpen = true;
-    filterOpen = false;
-    mealSearch = '';
-    filterDietaryIds = [];
-    filterCuisineId = null;
-    filterDifficulty = '';
-    filterPrepTimeMax = null;
-    filterIsTested = null;
-    if (dietaryTypes.length === 0) {
-      [dietaryTypes, cuisines] = await Promise.all([
-        api.getDietaryTypes() as Promise<DietaryType[]>,
-        api.getCuisines() as Promise<Cuisine[]>,
-      ]);
-    }
-    await loadPickerMeals();
   }
 
   function toggleDietary(id: number) {
@@ -250,9 +220,7 @@
 <!-- Meal Picker Bottom Sheet -->
 {#if pickerOpen}
   <div class="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onclick={(e) => { if (e.target === e.currentTarget) pickerOpen = false; }} role="presentation">
-    <div class="rounded-t-2xl max-h-[90vh] flex flex-col shadow-2xl" style="background: var(--color-surface)">
-
-      <!-- Header -->
+    <div class="rounded-t-2xl max-h-[90vh] h-[90vh] flex flex-col overflow-hidden shadow-2xl" style="background: var(--color-surface)">
       <div class="flex items-center justify-between px-4 pt-4 pb-2 border-b shrink-0" style="border-color: var(--color-border)">
         <div>
           <div class="font-semibold" style="color: var(--color-text)">Pick a meal</div>
@@ -261,105 +229,12 @@
         <button onclick={() => pickerOpen = false} class="text-xl leading-none" style="color: var(--color-text-muted)">✕</button>
       </div>
 
-      <!-- Search + filter toggle -->
-      <div class="px-4 py-2 border-b shrink-0 flex gap-2" style="border-color: var(--color-border)">
-        <input type="search" bind:value={mealSearch} oninput={onSearchInput} placeholder="Search meals…"
-          class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-          style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)" />
-        <button onclick={() => filterOpen = !filterOpen}
-          class="relative p-2 rounded-lg border transition-colors"
-          style="border-color: {activeFilterCount > 0 ? 'var(--color-accent)' : 'var(--color-border)'}; color: {activeFilterCount > 0 ? 'var(--color-accent)' : 'var(--color-text-muted)'}">
-          ⚙️
-          {#if activeFilterCount > 0}
-            <span class="absolute -top-1 -right-1 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center" style="background: var(--color-accent)">{activeFilterCount}</span>
-          {/if}
-        </button>
-      </div>
-
-      <!-- Filter panel -->
-      {#if filterOpen}
-        <div class="px-4 py-3 border-b shrink-0 space-y-3" style="background: var(--color-bg); border-color: var(--color-border)">
-          <div class="flex flex-wrap gap-1.5">
-            {#each dietaryTypes as dt}
-              <button onclick={() => { toggleDietary(dt.id); loadPickerMeals(); }}
-                class="text-xs px-2.5 py-1 rounded-full border transition-colors"
-                style="{filterDietaryIds.includes(dt.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}">
-                {dt.icon ?? ''} {dt.name}
-              </button>
-            {/each}
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <select bind:value={filterDifficulty} onchange={loadPickerMeals}
-              class="border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">
-              <option value="">Any difficulty</option>
-              <option value="easy">Easy</option>
-              <option value="medium">Medium</option>
-              <option value="hard">Hard</option>
-            </select>
-            <select bind:value={filterCuisineId} onchange={loadPickerMeals}
-              class="border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">
-              <option value={null}>Any cuisine</option>
-              {#each cuisines as c}<option value={c.id}>{c.name}</option>{/each}
-            </select>
-          </div>
-
-          <div>
-            <label class="text-xs block mb-1" style="color: var(--color-text-muted)">
-              Max prep time{filterPrepTimeMax ? ` · ${filterPrepTimeMax} min` : ''}
-            </label>
-            <input type="range" min="5" max="120" step="5" bind:value={filterPrepTimeMax} onchange={loadPickerMeals}
-              class="w-full accent-green-600" />
-          </div>
-
-          <div class="flex gap-2">
-            <button onclick={() => { filterIsTested = filterIsTested === true ? null : true; loadPickerMeals(); }}
-              class="text-xs px-2.5 py-1 rounded-full border transition-colors"
-              style="{filterIsTested === true ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}">
-              ✅ Tested only
-            </button>
-            {#if activeFilterCount > 0}
-              <button onclick={() => { filterDietaryIds = []; filterCuisineId = null; filterDifficulty = ''; filterPrepTimeMax = null; filterIsTested = null; loadPickerMeals(); }}
-                class="text-xs ml-auto underline" style="color: var(--color-text-muted)">Clear</button>
-            {/if}
-          </div>
-        </div>
-      {/if}
-
-      <!-- Meal list -->
-      <div class="overflow-y-auto flex-1 py-2">
-        {#if pickerLoading}
-          <div class="flex justify-center py-8"><div class="animate-spin rounded-full h-7 w-7 border-4 border-green-600 border-t-transparent"></div></div>
-        {:else if allMeals.length === 0}
-          <p class="text-center py-8 text-sm" style="color: var(--color-text-muted)">No meals found. <a href="/meals/new" class="underline" style="color: var(--color-accent)">Add one?</a></p>
-        {:else}
-          <div class="px-4 py-1 text-xs" style="color: var(--color-text-muted)">{allMeals.length} meal{allMeals.length === 1 ? '' : 's'}</div>
-          {#each allMeals as meal}
-            <button onclick={() => assignMeal(meal)}
-              class="w-full flex items-start gap-3 px-4 py-3 transition-colors text-left border-b"
-              style="border-color: var(--color-border)">
-              <div class="flex-1">
-                <div class="font-medium text-sm flex items-center gap-1" style="color: var(--color-text)">
-                  {meal.name}
-                  {#if meal.isFavourite}<span class="text-xs">⭐</span>{/if}
-                </div>
-                <div class="flex gap-2 mt-0.5 flex-wrap">
-                  <span class="text-xs" style="color: var(--color-text-muted)">⏱ {meal.prepTimeMinutes + meal.cookTimeMinutes} min</span>
-                  <span class="text-xs px-1.5 rounded {DIFFICULTY_COLORS[meal.difficulty]}">{meal.difficulty}</span>
-                  {#if (meal as any).leftoverBehaviour && (meal as any).leftoverBehaviour !== 'consumed_same'}
-                    <span class="text-xs">{(meal as any).leftoverBehaviour === 'freezable' ? '❄️' : '🥡'}</span>
-                  {/if}
-                  {#each (meal.dietaryTypes || []).slice(0, 3) as dt}
-                    <span class="text-xs" style="color: var(--color-text-muted)">{dt.icon ?? ''} {dt.name}</span>
-                  {/each}
-                </div>
-              </div>
-            </button>
-          {/each}
-        {/if}
-      </div>
+      <MealBrowser
+        embedded={true}
+        selectable={true}
+        showAddButton={false}
+        onSelect={assignMeal}
+      />
     </div>
   </div>
 {/if}
@@ -393,7 +268,7 @@
 
         <label class="flex items-center gap-3 cursor-pointer">
           <input type="checkbox" bind:checked={autoOverwrite} class="w-4 h-4 accent-green-600" />
-          <span class="text-sm" style="color: var(--color-text)">Overwrite existing planned meals</span>
+          <span class="text-sm" style="color: var(--color-text)">Only overwrite already filled slots</span>
         </label>
       </div>
 
