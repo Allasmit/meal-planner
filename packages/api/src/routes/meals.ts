@@ -18,7 +18,7 @@ export const mealsRouter = Router();
 
 mealsRouter.use(requireAuth);
 
-// â”€â”€â”€ Reference data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â”€â”€â”€ Reference data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 mealsRouter.get('/dietary-types', async (_req: Request, res: Response): Promise<void> => {
   res.json(await db.select().from(dietaryTypes));
@@ -66,6 +66,34 @@ mealsRouter.post('/ingredients', async (req: AuthRequest, res: Response): Promis
       res.status(500).json({ error: 'Failed to create ingredient' });
     }
   }
+});
+
+mealsRouter.patch('/ingredients/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const schema = z.object({
+    name: z.string().min(1).max(100).optional(),
+    categoryId: z.number().int().nullable().optional(),
+    defaultUnit: z.string().max(32).optional(),
+  });
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  const [updated] = await db
+    .update(ingredients)
+    .set(parsed.data)
+    .where(eq(ingredients.id, id))
+    .returning();
+
+  if (!updated) {
+    res.status(404).json({ error: 'Ingredient not found' });
+    return;
+  }
+
+  res.json(updated);
 });
 
 // â”€â”€â”€ Meals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

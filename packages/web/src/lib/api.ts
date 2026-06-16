@@ -72,6 +72,8 @@ export const api = {
     request(`/meals/ingredients${search ? `?search=${encodeURIComponent(search)}` : ''}`),
   createIngredient: (body: object) =>
     request('/meals/ingredients', { method: 'POST', body: JSON.stringify(body) }),
+  updateIngredient: (id: number, body: object) =>
+    request(`/meals/ingredients/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
   // Meals
   getMeals: (params?: Record<string, string>) => {
@@ -91,8 +93,8 @@ export const api = {
     request(`/planner/${date}/${slot}`, { method: 'PUT', body: JSON.stringify(body) }),
   clearPlanSlot: (date: string, slot: string) =>
     request(`/planner/${date}/${slot}`, { method: 'DELETE' }),
-  getShoppingList: (weekStart: string) =>
-    request(`/planner/shopping-list?weekStart=${weekStart}`),
+  getShoppingList: (weekStart: string, showHidden = false) =>
+    request(`/planner/shopping-list?weekStart=${weekStart}${showHidden ? '&showHidden=true' : ''}`),
 
   // Import
   importUrl: (body: UrlImportBody) =>

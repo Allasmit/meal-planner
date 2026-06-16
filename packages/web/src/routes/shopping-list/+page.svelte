@@ -9,6 +9,7 @@
   let loading = $state(false);
   let checked = $state(new Set<string>());
   let shareError = $state('');
+  let showSpices = $state(false);
 
   let weekLabel = $derived(formatWeekRange(weekStart));
 
@@ -18,7 +19,7 @@
     loading = true;
     checked = new Set();
     try {
-      list = await api.getShoppingList(toDateString(weekStart)) as ShoppingListCategory[];
+      list = await api.getShoppingList(toDateString(weekStart), showSpices) as ShoppingListCategory[];
     } finally {
       loading = false;
     }
@@ -26,6 +27,11 @@
 
   function prevWeek() { const d = new Date(weekStart); d.setDate(d.getDate() - 7); weekStart = d; loadList(); }
   function nextWeek() { const d = new Date(weekStart); d.setDate(d.getDate() + 7); weekStart = d; loadList(); }
+
+  function toggleSpices() {
+    showSpices = !showSpices;
+    loadList();
+  }
 
   function toggleItem(key: string) {
     const s = new Set(checked);
@@ -123,4 +129,17 @@
       </div>
     {/each}
   {/if}
+</div>
+
+<div class="flex items-center gap-2">
+  <input
+    id="showSpices"
+    type="checkbox"
+    checked={showSpices}
+    onchange={toggleSpices}
+    class="w-4 h-4 accent-green-600"
+  />
+  <label for="showSpices" class="text-sm" style="color: var(--color-text-muted)">
+    Show spices and pantry items
+  </label>
 </div>

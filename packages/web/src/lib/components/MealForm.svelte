@@ -15,6 +15,7 @@
   let saving = $state(false);
   let error = $state('');
   let ingredientSearch = $state('');
+  let selectedIngredientCategoryId = $state<number | null>(null);
 
   let form = $state<MealFormData>({
     name: '',
@@ -116,6 +117,13 @@
       : [...form.suitableForMemberIds, id];
   }
 
+  async function updateIngredientCategory(ingredientId: number, categoryId: number | null) {
+    await api.updateIngredient(ingredientId, { categoryId });
+    allIngredients = allIngredients.map((ingredient) =>
+      ingredient.id === ingredientId ? { ...ingredient, categoryId } : ingredient
+    );
+  }
+
   let filteredIngredients = $derived(
     allIngredients.filter(
       (i) => i.name.toLowerCase().includes(ingredientSearch.toLowerCase()) &&
@@ -132,11 +140,19 @@
 
   function getIngredientName(id: number) { return allIngredients.find((i) => i.id === id)?.name ?? ''; }
 
+  function getIngredientCategoryId(id: number) {
+    return allIngredients.find((i) => i.id === id)?.categoryId ?? null;
+  }
+
   async function createAndAddIngredient() {
     if (!ingredientSearch.trim()) return;
-    const ing = await api.createIngredient({ name: ingredientSearch.trim() }) as Ingredient;
+    const ing = await api.createIngredient({
+      name: ingredientSearch.trim(),
+      categoryId: selectedIngredientCategoryId,
+    }) as Ingredient;
     allIngredients = [...allIngredients, ing];
     addIngredient(ing);
+    selectedIngredientCategoryId = null;
   }
 
   const PROTEIN_OPTIONS = [
@@ -319,6 +335,21 @@
     {#each form.ingredients as ing, idx}
       <div class="flex items-center gap-2 text-sm">
         <span class="flex-1 font-medium" style="color: var(--color-text)">{getIngredientName(ing.ingredientId)}</span>
+
+        <select
+          value={getIngredientCategoryId(ing.ingredientId) ?? ''}
+          onchange={(e) => updateIngredientCategory(
+            ing.ingredientId,
+            e.currentTarget.value === '' ? null : Number(e.currentTarget.value)
+          )}
+          class="w-44 border rounded px-2 py-1 text-sm"
+          style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">
+          <option value="">No category</option>
+          {#each ingredientCategories as category}
+            <option value={category.id}>{category.name}</option>
+          {/each}
+        </select>
+
         <input type="number" bind:value={ing.quantity} min="0" step="0.1" class="w-20 border rounded px-2 py-1 text-center" style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)" />
         <input type="text" bind:value={ing.unit} class="w-20 border rounded px-2 py-1" placeholder="unit" style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)" />
         <input type="text" bind:value={ing.notes} class="w-28 border rounded px-2 py-1" placeholder="notes" style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)" />
@@ -330,6 +361,17 @@
       <input type="search" bind:value={ingredientSearch} placeholder="Search or add ingredient…"
         class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
         style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)" />
+
+      <select
+        bind:value={selectedIngredientCategoryId}
+        class="w-full mt-2 border rounded-lg px-3 py-2 text-sm"
+        style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">
+        <option value={null}>No category</option>
+        {#each ingredientCategories as category}
+          <option value={category.id}>{category.name}</option>
+        {/each}
+      </select>
+
       {#if ingredientSearch && filteredIngredients.length > 0}
         <div class="absolute z-10 top-full left-0 right-0 border rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto" style="background: var(--color-surface); border-color: var(--color-border)">
           {#each filteredIngredients.slice(0, 10) as ing}

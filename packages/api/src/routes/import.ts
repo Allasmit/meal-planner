@@ -141,80 +141,6 @@ interface ParsedRecipe {
   estimatedCost: number | null;
 }
 
-function extractRecipeFromJsonLd(html: string): ParsedRecipe | null {
-  const $ = cheerio.load(html);
-  let recipe: any = null;
-
-  $('script[type="application/ld+json"]').each((_, el) => {
-    if (recipe) return;
-    try {
-      const data = JSON.parse($(el).html() ?? '');
-      const items = Array.isArray(data) ? data : data['@graph'] ? data['@graph'] : [data];
-      const found = items.find((item: any) => item['@type'] === 'Recipe' || (Array.isArray(item['@type']) && item['@type'].includes('Recipe')));
-      if (found) recipe = found;
-    } catch {
-      /* skip malformed JSON-LD */
-    }
-  });
-
-  if (!recipe) return null;
-
-  const rawServings = recipe.recipeYield;
-  const servings = Array.isArray(rawServings)
-    ? parseInt(rawServings[0]) || 2
-    : parseInt(rawServings) || 2;
-
-  const steps = toStringArray(
-    Array.isArray(recipe.recipeInstructions)
-      ? recipe.recipeInstructions.map((s: any) => typeof s === 'string' ? s : s?.text ?? '')
-      : recipe.recipeInstructions
-  )
-    .map((step) => decodeHtmlEntities(step))
-    .filter(Boolean);
-
-  const cuisine = decodeHtmlEntities(toStringArray(recipe.recipeCuisine)[0] ?? null);
-  const mealCategory = normalizeMealCategory(
-    decodeHtmlEntities(toStringArray(recipe.recipeCategory)[0] ?? toStringArray(recipe.recipeType)[0] ?? null)
-  );
-
-  const dietaryTypeNames = toStringArray(recipe.suitableForDiet)
-    .map((value) => decodeHtmlEntities(value))
-    .map((value) => value.split('/').pop()?.replace(/^Diet$/, '') ?? value)
-    .filter(Boolean);
-
-  const priceCandidate =
-    recipe.estimatedCost?.value ??
-    recipe.estimatedCost ??
-    recipe.offers?.price ??
-    recipe.offers?.[0]?.price ??
-    null;
-
-  const estimatedCost = priceCandidate == null ? null : Number(priceCandidate);
-
-  return {
-    name: decodeHtmlEntities(recipe.name ?? 'Imported Recipe'),
-    description: decodeHtmlEntities(recipe.description ?? ''),
-    prepTimeMinutes: parseISODuration(recipe.prepTime),
-    cookTimeMinutes: parseISODuration(recipe.cookTime),
-    servings,
-    instructions: steps,
-    ingredientStrings: toStringArray(recipe.recipeIngredient).map((value) => decodeHtmlEntities(value)),
-    imageUrl: extractRecipeImage($, recipe),
-    cuisine,
-    mealCategory,
-    dietaryTypeNames,
-    estimatedCost: Number.isFinite(estimatedCost) ? estimatedCost : null,
-  };
-}
-
-function firstNonEmpty(values: Array<string | null | undefined>): string | null {
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (trimmed) return trimmed;
-  }
-  return null;
-}
-
 function extractRecipeImage($: cheerio.CheerioAPI, recipe: any): string | null {
   const jsonLdImage =
     typeof recipe.image === 'string'
@@ -230,6 +156,426 @@ function extractRecipeImage($: cheerio.CheerioAPI, recipe: any): string | null {
     $('meta[name="twitter:image:src"]').attr('content'),
     $('link[rel="image_src"]').attr('href'),
   ]);
+}
+
+function firstNonEmpty(values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+function normalizeExtractedText(value: string | null | undefined): string {
+  return decodeHtmlEntities((value ?? '').replace(/\s+/g, ' ').trim());
+}
+
+function findRecipeContainer($: cheerio.CheerioAPI) {
+  const selectors = [
+    '.wprm-recipe-container',
+    '.wprm-recipe',
+    '.tasty-recipes',
+    '.mv-recipe-card',
+    '.mv-create',
+    '.recipe-card',
+    '.easyrecipe',
+    '.zrdn-recipe-container',
+    '[itemtype*="Recipe"]',
+    '[itemscope][itemtype*="Recipe"]',
+    'article',
+    'main',
+  ];
+
+  for (const selector of selectors) {
+    const match = $(selector).first();
+    if (match.length) return match;
+  }
+
+  return $.root();
+}
+
+function readFirstText(root: any, selectors: string[]): string | null {
+  for (const selector of selectors) {
+    const match = root.find(selector).first();
+    if (!match.length) continue;
+
+    const text = normalizeExtractedText(match.text());
+    if (text) return text;
+  }
+
+  return null;
+}
+
+function readFirstAttr(root: any, selectors: string[], attr: string): string | null {
+  for (const selector of selectors) {
+    const match = root.find(selector).first();
+    if (!match.length) continue;
+
+    const value = match.attr(attr)?.trim();
+    if (value) return value;
+  }
+
+  return null;
+}
+
+function collectTexts($: cheerio.CheerioAPI, root: any, selectors: string[]): string[] {
+  const values: string[] = [];
+
+  for (const selector of selectors) {
+    root.find(selector).each((_, el) => {
+      const text = normalizeExtractedText($(el).text());
+      if (text) values.push(text);
+    });
+  }
+
+  return values;
+}
+
+function collectSectionTexts(
+  $: cheerio.CheerioAPI,
+  root: any,
+  headingPattern: RegExp,
+  itemSelectors: string[]
+): string[] {
+  const values: string[] = [];
+
+  root.find('h1,h2,h3,h4,h5,h6,strong,b').each((_, el) => {
+    const heading = normalizeExtractedText($(el).text());
+    if (!headingPattern.test(heading)) return;
+
+    let current = $(el).next();
+    let safety = 0;
+
+    while (current.length && safety < 20) {
+      const tagName = String((current[0] as any)?.tagName ?? '').toLowerCase();
+      if (/^h[1-6]$/.test(tagName)) break;
+
+      if (current.is('ul,ol')) {
+        current.find('li').each((__, item) => {
+          const text = normalizeExtractedText($(item).text());
+          if (text) values.push(text);
+        });
+      } else {
+        const text = normalizeExtractedText(current.text());
+        if (text && !/^(ingredients?|instructions?|directions?|method)$/i.test(text)) {
+          values.push(text);
+        }
+      }
+
+      current = current.next();
+      safety++;
+    }
+  });
+
+  const directMatches = collectTexts($, root, itemSelectors);
+  return Array.from(new Set([...values, ...directMatches])).filter(Boolean);
+}
+function parseRecipeObject($: cheerio.CheerioAPI, recipe: any): ParsedRecipe {
+  const name = normalizeExtractedText(recipe.name) || 'Imported Recipe';
+  const description = normalizeExtractedText(
+    typeof recipe.description === 'string' ? recipe.description : '',
+  );
+
+  const prepTimeMinutes = parseISODuration(recipe.prepTime);
+  const cookTimeMinutes = parseISODuration(recipe.cookTime ?? recipe.totalTime);
+
+  let servings = 2;
+  const yieldRaw = recipe.recipeYield;
+  if (yieldRaw) {
+    const yieldStr = Array.isArray(yieldRaw) ? yieldRaw[0] : yieldRaw;
+    const yieldNum = parseInt(String(yieldStr), 10);
+    if (yieldNum > 0) servings = yieldNum;
+  }
+
+  const rawInstructions = recipe.recipeInstructions;
+  const instructions: string[] = [];
+  if (Array.isArray(rawInstructions)) {
+    for (const step of rawInstructions) {
+      if (typeof step === 'string') {
+        const text = normalizeExtractedText(step);
+        if (text) instructions.push(text);
+      } else if (step?.['@type'] === 'HowToSection' && Array.isArray(step.itemListElement)) {
+        for (const sub of step.itemListElement) {
+          const text = normalizeExtractedText(sub.text ?? sub.name);
+          if (text) instructions.push(text);
+        }
+      } else if (step) {
+        const text = normalizeExtractedText(step.text ?? step.name ?? String(step));
+        if (text) instructions.push(text);
+      }
+    }
+  } else if (typeof rawInstructions === 'string') {
+    const text = normalizeExtractedText(rawInstructions);
+    if (text) instructions.push(text);
+  }
+
+  const ingredientStrings = toStringArray(recipe.recipeIngredient)
+    .map(normalizeExtractedText)
+    .filter(Boolean);
+
+  const imageUrl = extractRecipeImage($, recipe);
+
+  const cuisineRaw = Array.isArray(recipe.recipeCuisine)
+    ? recipe.recipeCuisine[0]
+    : recipe.recipeCuisine;
+  const cuisine = cuisineRaw ? normalizeExtractedText(String(cuisineRaw)) : null;
+
+  const categoryRaw = Array.isArray(recipe.recipeCategory)
+    ? recipe.recipeCategory[0]
+    : (recipe.recipeCategory ?? recipe.recipeType);
+  const mealCategory = normalizeMealCategory(categoryRaw);
+
+  const dietaryTypeNames: string[] = [];
+  for (const diet of toStringArray(recipe.suitableForDiet)) {
+    const lower = diet.toLowerCase().replace(/https?:\/\/schema\.org\//i, '');
+    if (lower.includes('glutenfree') || lower.includes('gluten-free')) dietaryTypeNames.push('Gluten Free');
+    if (lower.includes('dairyfree') || lower.includes('dairy-free')) dietaryTypeNames.push('Dairy Free');
+    if (lower.includes('vegan')) dietaryTypeNames.push('Vegan');
+    if (lower.includes('vegetarian')) dietaryTypeNames.push('Vegetarian');
+  }
+
+  let estimatedCost: number | null = null;
+  if (recipe.estimatedCost != null) {
+    const costVal =
+      typeof recipe.estimatedCost === 'object'
+        ? recipe.estimatedCost.value
+        : recipe.estimatedCost;
+    const parsed = parseFloat(String(costVal));
+    if (Number.isFinite(parsed)) estimatedCost = parsed;
+  }
+
+  return {
+    name,
+    description,
+    prepTimeMinutes,
+    cookTimeMinutes,
+    servings,
+    instructions,
+    ingredientStrings,
+    imageUrl,
+    cuisine,
+    mealCategory,
+    dietaryTypeNames,
+    estimatedCost,
+  };
+}
+
+function findRecipeInLd(data: any): any {
+  if (!data) return null;
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const found = findRecipeInLd(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  const type = data['@type'];
+  if (type === 'Recipe' || (Array.isArray(type) && type.includes('Recipe'))) {
+    return data;
+  }
+  if (Array.isArray(data['@graph'])) {
+    for (const item of data['@graph']) {
+      const found = findRecipeInLd(item);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function extractRecipeFromJsonLd(html: string): ParsedRecipe | null {
+  const $ = cheerio.load(html);
+  let result: ParsedRecipe | null = null;
+
+  $('script[type="application/ld+json"]').each((_, el) => {
+    if (result) return; // already found one
+    const content = $(el).html();
+    if (!content) return;
+    try {
+      const data = JSON.parse(content);
+      const recipe = findRecipeInLd(data);
+      if (recipe) result = parseRecipeObject($, recipe);
+    } catch {
+      // malformed JSON — skip
+    }
+  });
+
+  return result;
+}
+
+function extractRecipeFromMicrodata(html: string): ParsedRecipe | null {
+  const $ = cheerio.load(html);
+  const recipeEl = $('[itemtype*="schema.org/Recipe"]').first();
+  if (!recipeEl.length) return null;
+
+  const getProp = (prop: string): string =>
+    normalizeExtractedText(
+      recipeEl.find(`[itemprop="${prop}"]`).first().attr('content') ??
+      recipeEl.find(`[itemprop="${prop}"]`).first().text(),
+    );
+
+  const getAllProp = (prop: string): string[] => {
+    const results: string[] = [];
+    recipeEl.find(`[itemprop="${prop}"]`).each((_, el) => {
+      const text = normalizeExtractedText($(el).attr('content') ?? $(el).text());
+      if (text) results.push(text);
+    });
+    return results;
+  };
+
+  const name = getProp('name');
+  if (!name) return null;
+
+  const prepTimeEl = recipeEl.find('[itemprop="prepTime"]').first();
+  const cookTimeEl = recipeEl.find('[itemprop="cookTime"]').first();
+
+  const recipe = {
+    name,
+    description: getProp('description'),
+    prepTime: prepTimeEl.attr('datetime') ?? prepTimeEl.attr('content'),
+    cookTime: cookTimeEl.attr('datetime') ?? cookTimeEl.attr('content'),
+    recipeYield: getProp('recipeYield'),
+    recipeIngredient: getAllProp('recipeIngredient'),
+    recipeInstructions: getAllProp('recipeInstructions'),
+    recipeCuisine: getProp('recipeCuisine'),
+    recipeCategory: getProp('recipeCategory'),
+    image:
+      recipeEl.find('[itemprop="image"]').first().attr('src') ??
+      recipeEl.find('[itemprop="image"]').first().attr('content'),
+    suitableForDiet: getAllProp('suitableForDiet'),
+    estimatedCost: undefined,
+  };
+
+  if (!recipe.recipeIngredient.length && !recipe.recipeInstructions.length) return null;
+
+  return parseRecipeObject($, recipe);
+}
+
+function extractRecipeFromDomFallback(html: string): ParsedRecipe | null {
+  const $ = cheerio.load(html);
+  const container = findRecipeContainer($);
+
+  const title =
+    readFirstText(container, [
+      '.wprm-recipe-name',
+      '.tasty-recipes-title',
+      '.mv-create-title',
+      '.recipe-title',
+      '.entry-title',
+      '.post-title',
+      '[class*="recipe"] h1',
+      'h1',
+    ]) ??
+    readFirstText($.root(), ['title']) ??
+    'Imported Recipe';
+
+  const description =
+    readFirstAttr(container, ['meta[property="og:description"]', 'meta[name="description"]'], 'content') ??
+    readFirstText(container, [
+      '.wprm-recipe-summary',
+      '.tasty-recipes-description',
+      '.recipe-summary',
+      '.recipe-description',
+      '.summary',
+      '.description',
+      'article p',
+      'main p',
+    ]) ??
+    '';
+
+  const imageUrl = firstNonEmpty([
+    readFirstAttr(container, ['meta[property="og:image"]', 'meta[property="og:image:secure_url"]', 'meta[name="twitter:image"]'], 'content'),
+    readFirstAttr(container, ['.wprm-recipe-image img', '.tasty-recipes-image img', '.recipe-image img', '.entry-content img', 'article img'], 'src'),
+    readFirstAttr(container, ['.wprm-recipe-image img', '.tasty-recipes-image img', '.recipe-image img', '.entry-content img', 'article img'], 'data-src'),
+  ]);
+
+  const ingredientStrings = Array.from(
+    new Set([
+      ...collectTexts($, container, [
+        '[itemprop="recipeIngredient"]',
+        '.wprm-recipe-ingredient',
+        '.wprm-recipe-ingredient-group li',
+        '.tasty-recipes-ingredients li',
+        '.mv-ingredient',
+        '.mv-create-ingredients li',
+        '.easyrecipe-ingredient',
+        '.zrdn-ingredient',
+        '.ingredients li',
+        '.recipe-ingredients li',
+        '[class*="ingredient"] li',
+      ]),
+      ...collectSectionTexts($, container, /ingredients?/i, [
+        '.wprm-recipe-ingredient',
+        '.wprm-recipe-ingredient-group li',
+        '.tasty-recipes-ingredients li',
+        '.mv-create-ingredients li',
+        '.ingredients li',
+        '.recipe-ingredients li',
+        '[class*="ingredient"] li',
+      ]),
+    ])
+  )
+    .map((value) => normalizeExtractedText(value))
+    .filter((value) => value.length > 2)
+    .filter((value) => !/^(print|share|save|jump to recipe|ingredients?)$/i.test(value))
+    .slice(0, 100);
+
+  const instructions = Array.from(
+    new Set([
+      ...collectTexts($, container, [
+        '[itemprop="recipeInstructions"]',
+        '.wprm-recipe-instruction',
+        '.wprm-recipe-instruction-group li',
+        '.tasty-recipes-instructions li',
+        '.mv-instruction',
+        '.mv-create-directions li',
+        '.easyrecipe-instruction',
+        '.zrdn-instruction',
+        '.instructions li',
+        '.method li',
+        '.directions li',
+        '.direction li',
+        '[class*="instruction"] li',
+        '[class*="direction"] li',
+      ]),
+      ...collectSectionTexts($, container, /instructions?|directions?|method|how to make/i, [
+        '.wprm-recipe-instruction',
+        '.wprm-recipe-instruction-group li',
+        '.tasty-recipes-instructions li',
+        '.mv-create-directions li',
+        '.instructions li',
+        '.method li',
+        '.directions li',
+        '.direction li',
+        '[class*="instruction"] li',
+        '[class*="direction"] li',
+      ]),
+    ])
+  )
+    .map((value) => normalizeExtractedText(value))
+    .filter(Boolean)
+    .slice(0, 50);
+
+  if (ingredientStrings.length === 0 && instructions.length === 0) return null;
+
+  return parseRecipeObject($, {
+    name: title,
+    description,
+    prepTime: undefined,
+    cookTime: undefined,
+    recipeYield: '2',
+    recipeCuisine: undefined,
+    recipeCategory: undefined,
+    recipeType: undefined,
+    suitableForDiet: [],
+    recipeInstructions: instructions,
+    recipeIngredient: ingredientStrings,
+    image: imageUrl ?? undefined,
+    estimatedCost: undefined,
+  });
+}
+
+function extractRecipeFromHtml(html: string): ParsedRecipe | null {
+  return extractRecipeFromJsonLd(html) ?? extractRecipeFromMicrodata(html) ?? extractRecipeFromDomFallback(html);
 }
 
 // ─── POST /api/import/url ─────────────────────────────────────────────────────
@@ -255,19 +601,35 @@ importRouter.post('/url', async (req: AuthRequest, res: Response): Promise<void>
   let html: string;
   try {
     const response = await fetch(parsed.data.url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MealPlannerBot/1.0)' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
+        'Upgrade-Insecure-Requests': '1',
+      },
       signal: AbortSignal.timeout(10000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      if ([402, 403, 429].includes(response.status)) {
+        res.status(422).json({
+          error: `This site blocked the import (HTTP ${response.status}). Open the recipe page in your browser, copy the page HTML (Ctrl+U or right-click → View Page Source), then use the "Paste Page HTML" import method instead.`,
+        });
+      } else {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return;
+    }
     html = await response.text();
   } catch (e: any) {
     res.status(422).json({ error: `Could not fetch URL: ${e.message}` });
     return;
   }
 
-  const recipe = extractRecipeFromJsonLd(html);
+  const recipe = extractRecipeFromHtml(html);
   if (!recipe) {
-    res.status(422).json({ error: 'No recipe data found on that page. The site may not support structured recipe data.' });
+    res.status(422).json({ error: 'No supported recipe data found on that page. The site may not expose JSON-LD, microdata, or usable recipe markup.' });
     return;
   }
 
@@ -629,9 +991,9 @@ importRouter.post('/parse-html', async (req: AuthRequest, res: Response): Promis
 
   const { html, sourceUrl } = parsed.data;
 
-  const recipe = extractRecipeFromJsonLd(html);
+  const recipe = extractRecipeFromHtml(html);
   if (!recipe) {
-    res.status(422).json({ error: 'No recipe data found on that page. The site may not support structured recipe data.' });
+    res.status(422).json({ error: 'No supported recipe data found on that page. The site may not expose JSON-LD, microdata, or usable recipe markup.' });
     return;
   }
 

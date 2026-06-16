@@ -9,13 +9,15 @@ export const plannerRouter = Router();
 
 plannerRouter.use(requireAuth);
 
-// GET /api/planner/shopping-list â€” must be before /:date/:slot to avoid param collision
+// GET /api/planner/shopping-list — must be before /:date/:slot to avoid param collision
 plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Promise<void> => {
   const weekStart = req.query.weekStart as string | undefined;
   if (!weekStart || !/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
     res.status(400).json({ error: 'weekStart query param required (YYYY-MM-DD)' });
     return;
   }
+
+  const showHidden = req.query.showHidden === 'true';
 
   const start = new Date(weekStart);
   const end = new Date(start);
@@ -28,7 +30,10 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
     .where(between(mealPlans.planDate, weekStart, weekEnd));
 
   const validPlans = plans.filter((p) => p.mealId !== null);
-  if (validPlans.length === 0) { res.json([]); return; }
+  if (validPlans.length === 0) {
+    res.json([]);
+    return;
+  }
 
   const mealIds = validPlans.map((p) => p.mealId!);
 
@@ -48,27 +53,79 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
     .leftJoin(ingredientCategories, eq(ingredients.categoryId, ingredientCategories.id))
     .where(inArray(mealIngredients.mealId, mealIds));
 
-  type AggKey = string;
-  const agg = new Map<AggKey, { ingredientId: number; ingredientName: string; quantity: number; unit: string; categoryId: number | null; categoryName: string | null; categorySortOrder: number }>();
+  const hiddenCategoryNames = new Set([
+    'Spices & Herbs',
+    'Condiments & Sauces',
+    'Pantry & Dry Goods',
+    'Canned & Jarred',
+    'Beverages',
+    'Frozen',
+    'Other',
+  ]);
 
-  for (const row of rows) {
+  const filteredRows = showHidden
+    ? rows
+    : rows.filter((row) => {
+        if (!row.categoryName) return true;
+        return !hiddenCategoryNames.has(row.categoryName);
+      });
+
+  type AggKey = string;
+  const agg = new Map<
+    AggKey,
+    {
+      ingredientId: number;
+      ingredientName: string;
+      quantity: number;
+      unit: string;
+      categoryId: number | null;
+      categoryName: string | null;
+      categorySortOrder: number;
+    }
+  >();
+
+  for (const row of filteredRows) {
     const key: AggKey = `${row.ingredientId}::${row.unit}`;
     if (agg.has(key)) {
       agg.get(key)!.quantity += row.quantity;
     } else {
-      agg.set(key, { ingredientId: row.ingredientId, ingredientName: row.ingredientName, quantity: row.quantity, unit: row.unit, categoryId: row.categoryId ?? null, categoryName: row.categoryName ?? 'Other', categorySortOrder: row.categorySortOrder ?? 99 });
+      agg.set(key, {
+        ingredientId: row.ingredientId,
+        ingredientName: row.ingredientName,
+        quantity: row.quantity,
+        unit: row.unit,
+        categoryId: row.categoryId ?? null,
+        categoryName: row.categoryName ?? 'Other',
+        categorySortOrder: row.categorySortOrder ?? 99,
+      });
     }
   }
 
-  type CategoryGroup = { categoryId: number | null; categoryName: string; sortOrder: number; items: { ingredientId: number; name: string; quantity: number; unit: string }[] };
+  type CategoryGroup = {
+    categoryId: number | null;
+    categoryName: string;
+    sortOrder: number;
+    items: { ingredientId: number; name: string; quantity: number; unit: string }[];
+  };
+
   const categoryMap = new Map<string, CategoryGroup>();
 
   for (const item of agg.values()) {
     const catKey = String(item.categoryId ?? 'null');
     if (!categoryMap.has(catKey)) {
-      categoryMap.set(catKey, { categoryId: item.categoryId, categoryName: item.categoryName ?? 'Other', sortOrder: item.categorySortOrder, items: [] });
+      categoryMap.set(catKey, {
+        categoryId: item.categoryId,
+        categoryName: item.categoryName ?? 'Other',
+        sortOrder: item.categorySortOrder,
+        items: [],
+      });
     }
-    categoryMap.get(catKey)!.items.push({ ingredientId: item.ingredientId, name: item.ingredientName, quantity: Math.round(item.quantity * 100) / 100, unit: item.unit });
+    categoryMap.get(catKey)!.items.push({
+      ingredientId: item.ingredientId,
+      name: item.ingredientName,
+      quantity: Math.round(item.quantity * 100) / 100,
+      unit: item.unit,
+    });
   }
 
   const result = [...categoryMap.values()]
