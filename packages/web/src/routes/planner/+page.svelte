@@ -323,3 +323,12 @@
     </div>
   </div>
 {/if}
+
+<style>
+  @media print {
+    @page {
+      size: landscape;
+      margin: 12mm;
+    }
+  }
+</style>

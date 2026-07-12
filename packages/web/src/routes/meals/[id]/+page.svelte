@@ -20,10 +20,16 @@
     lamb: '🐑 Lamb',
     other: '🍲 Other',
   };
+
   const CATEGORY_LABELS: Record<string, string> = {
-    dinner: '🌙 Dinner', breakfast: '☀️ Breakfast', lunch: '🥪 Lunch',
-    baking: '🍞 Baking', treat: '🍰 Treat', snack: '🍎 Snack',
+    dinner: '🌙 Dinner',
+    breakfast: '☀️ Breakfast',
+    lunch: '🥪 Lunch',
+    baking: '🍞 Baking',
+    treat: '🍰 Treat',
+    snack: '🍎 Snack',
   };
+
   const LEFTOVER_LABELS: Record<string, string> = {
     consumed_same: '🍽️ Consumed same meal',
     fridge_next_day: '🥡 Fridge — next day',
@@ -46,14 +52,39 @@
     await api.deleteMeal(id);
     goto('/meals');
   }
+
+  function printRecipe() {
+    window.print();
+  }
 </script>
 
 {#if loading}
-  <div class="flex justify-center py-10"><div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div></div>
+  <div class="flex justify-center py-10">
+    <div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div>
+  </div>
 {:else if meal}
   <div class="max-w-2xl mx-auto p-4 space-y-6" style="color: var(--color-text)">
-    <!-- Header -->
-    <div class="flex items-start justify-between gap-3">
+    <div class="print:hidden flex justify-end">
+      <button
+        onclick={printRecipe}
+        class="text-sm font-semibold px-3 py-1.5 rounded-xl border transition-colors"
+        style="border-color: var(--color-border); color: var(--color-text); background: var(--color-surface)"
+      >
+        Print / PDF
+      </button>
+    </div>
+
+    <div class="hidden print:block mb-4">
+      <div class="text-2xl font-bold" style="color: var(--color-text)">{meal.name}</div>
+      {#if meal.description}
+        <div class="text-sm mt-1" style="color: var(--color-text-muted)">{meal.description}</div>
+      {/if}
+      <div class="text-xs mt-1" style="color: var(--color-text-muted)">
+        Printed {new Date().toLocaleDateString()}
+      </div>
+    </div>
+
+    <div class="flex items-start justify-between gap-3 print:hidden">
       <div>
         <div class="flex items-center gap-2 flex-wrap">
           <h1 class="text-2xl font-bold" style="color: var(--color-text)">{meal.name}</h1>
@@ -72,7 +103,7 @@
     </div>
 
     {#if meal.imageUrl}
-      <div class="overflow-hidden rounded-2xl shadow-sm" style="background: var(--color-surface); border: 1px solid var(--color-border)">
+      <div class="overflow-hidden rounded-2xl shadow-sm print:hidden" style="background: var(--color-surface); border: 1px solid var(--color-border)">
         <img
           src={meal.imageUrl}
           alt={meal.name}
@@ -82,7 +113,6 @@
       </div>
     {/if}
 
-    <!-- Meta badges -->
     <div class="flex gap-2 flex-wrap">
       <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">⏱ Prep: {meal.prepTimeMinutes} min</span>
       <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">🔥 Cook: {meal.cookTimeMinutes} min</span>
@@ -105,7 +135,6 @@
       {/each}
     </div>
 
-    <!-- Ingredients -->
     {#if meal.ingredients?.length}
       <div class="rounded-xl shadow-sm overflow-hidden" style="background: var(--color-surface); border: 1px solid var(--color-border)">
         <div class="px-4 py-3 border-b font-semibold" style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">🛒 Ingredients</div>
@@ -120,7 +149,6 @@
       </div>
     {/if}
 
-    <!-- Instructions -->
     {#if meal.instructions?.length}
       <div class="rounded-xl shadow-sm overflow-hidden" style="background: var(--color-surface); border: 1px solid var(--color-border)">
         <div class="px-4 py-3 border-b font-semibold" style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">👨‍🍳 Instructions</div>
@@ -143,10 +171,19 @@
     {/if}
 
     {#if (meal as any).sourceUrl}
-      <div>
+      <div class="print:hidden">
         <a href={(meal as any).sourceUrl} target="_blank" rel="noopener noreferrer"
           class="text-sm underline" style="color: var(--color-accent)">🔗 View original recipe →</a>
       </div>
     {/if}
   </div>
 {/if}
+
+<style>
+  @media print {
+    @page {
+      size: portrait;
+      margin: 12mm;
+    }
+  }
+</style>

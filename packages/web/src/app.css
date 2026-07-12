@@ -76,11 +76,6 @@ body {
 }
 
 @media print {
-  @page {
-    size: landscape;
-    margin: 12mm;
-  }
-
   html, body {
     background: #fff !important;
     color: #000 !important;
