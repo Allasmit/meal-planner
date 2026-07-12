@@ -19,9 +19,16 @@ type HtmlImportBody = MealImportBody & {
 };
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const isFormData = options?.body instanceof FormData;
+  const headers: Record<string, string> = {};
+
+  if (!isFormData) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
     ...options,
   });
 
@@ -32,10 +39,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       typeof errVal === 'string'
         ? errVal
         : typeof errVal === 'object' && errVal !== null
-        ? Object.entries(errVal.fieldErrors ?? {})
-            .map(([f, msgs]) => `${f}: ${(msgs as string[]).join(', ')}`)
-            .join('; ') || JSON.stringify(errVal)
-        : `Request failed: ${res.status}`;
+          ? Object.entries(errVal.fieldErrors ?? {})
+              .map(([f, msgs]) => `${f}: ${(msgs as string[]).join(', ')}`)
+              .join('; ') || JSON.stringify(errVal)
+          : `Request failed: ${res.status}`;
     throw new Error(message);
   }
 
@@ -43,7 +50,6 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  // Auth
   setupStatus: () => request<{ setupRequired: boolean }>('/auth/setup-status'),
   setup: (body: { username: string; displayName: string; password: string }) =>
     request('/auth/setup', { method: 'POST', body: JSON.stringify(body) }),
@@ -52,7 +58,6 @@ export const api = {
   logout: () => request('/auth/logout', { method: 'POST' }),
   me: () => request('/auth/me'),
 
-  // Users (admin)
   getUsers: () => request('/users'),
   createUser: (body: object) =>
     request('/users', { method: 'POST', body: JSON.stringify(body) }),
@@ -62,12 +67,10 @@ export const api = {
   resetPassword: (id: number, password: string) =>
     request(`/users/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) }),
 
-  // Reference data
   getDietaryTypes: () => request('/meals/dietary-types'),
   getCuisines: () => request('/meals/cuisines'),
   getIngredientCategories: () => request('/meals/ingredient-categories'),
 
-  // Ingredients
   getIngredients: (search?: string) =>
     request(`/meals/ingredients${search ? `?search=${encodeURIComponent(search)}` : ''}`),
   createIngredient: (body: object) =>
@@ -75,7 +78,6 @@ export const api = {
   updateIngredient: (id: number, body: object) =>
     request(`/meals/ingredients/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
-  // Meals
   getMeals: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
     return request(`/meals${qs}`);
@@ -87,7 +89,6 @@ export const api = {
     request(`/meals/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteMeal: (id: number) => request(`/meals/${id}`, { method: 'DELETE' }),
 
-  // Planner
   getWeekPlan: (weekStart: string) => request(`/planner?weekStart=${weekStart}`),
   setPlanSlot: (date: string, slot: string, body: object) =>
     request(`/planner/${date}/${slot}`, { method: 'PUT', body: JSON.stringify(body) }),
@@ -96,17 +97,15 @@ export const api = {
   getShoppingList: (weekStart: string, showHidden = false) =>
     request(`/planner/shopping-list?weekStart=${weekStart}${showHidden ? '&showHidden=true' : ''}`),
 
-  // Import
   importUrl: (body: UrlImportBody) =>
     request('/import/url', { method: 'POST', body: JSON.stringify(body) }),
-
   importCsv: (csvText: string) =>
     request('/import/csv', { method: 'POST', body: JSON.stringify({ csvText }) }),
-
   importParseHtml: (body: HtmlImportBody) =>
     request('/import/parse-html', { method: 'POST', body: JSON.stringify(body) }),
+  importMedia: (formData: FormData) =>
+    request('/import/media', { method: 'POST', body: formData }),
 
-  // Family
   getFamilyMembers: () => request('/family'),
   createFamilyMember: (body: object) =>
     request('/family', { method: 'POST', body: JSON.stringify(body) }),
@@ -114,7 +113,6 @@ export const api = {
     request(`/family/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteFamilyMember: (id: number) => request(`/family/${id}`, { method: 'DELETE' }),
 
-  // Planner rules & settings
   getPlannerRules: () => request('/planner/rules'),
   updatePlannerRule: (id: number, body: object) =>
     request(`/planner/rules/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),

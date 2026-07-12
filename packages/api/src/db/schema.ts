@@ -161,6 +161,17 @@ export const mealSuitableFor = sqliteTable(
   (t) => [uniqueIndex('meal_suitable_unique').on(t.mealId, t.familyMemberId)],
 );
 
+// ─── Meal ↔ Family Members (who prefer this meal) ────────────────────────────
+
+export const mealPreferredBy = sqliteTable(
+'meal_preferred_by',
+{
+mealId: integer('meal_id').notNull().references(() => meals.id, { onDelete: 'cascade' }),
+familyMemberId: integer('family_member_id').notNull().references(() => familyMembers.id, { onDelete: 'cascade' }),
+},
+(t) => [uniqueIndex('meal_preferred_unique').on(t.mealId, t.familyMemberId)],
+);
+
 // ─── Weekly Planner Rules ─────────────────────────────────────────────────────
 
 export const weeklyRules = sqliteTable('weekly_rules', {
@@ -178,6 +189,7 @@ export const weeklyRules = sqliteTable('weekly_rules', {
 export const usersRelations = relations(users, ({ many }) => ({
   createdMeals: many(meals, { relationName: 'createdBy' }),
   mealPlans: many(mealPlans),
+  preferredBy: many(mealPreferredBy),
 }));
 
 export const mealsRelations = relations(meals, ({ one, many }) => ({
@@ -221,6 +233,7 @@ export const mealPlansRelations = relations(mealPlans, ({ one }) => ({
 export const familyMembersRelations = relations(familyMembers, ({ many }) => ({
   dietaryTypes: many(familyMemberDietaryTypes),
   suitableForMeals: many(mealSuitableFor),
+  preferredMeals: many(mealPreferredBy),
 }));
 
 export const familyMemberDietaryTypesRelations = relations(familyMemberDietaryTypes, ({ one }) => ({
@@ -231,4 +244,9 @@ export const familyMemberDietaryTypesRelations = relations(familyMemberDietaryTy
 export const mealSuitableForRelations = relations(mealSuitableFor, ({ one }) => ({
   meal: one(meals, { fields: [mealSuitableFor.mealId], references: [meals.id] }),
   familyMember: one(familyMembers, { fields: [mealSuitableFor.familyMemberId], references: [familyMembers.id] }),
+}));
+
+export const mealPreferredByRelations = relations(mealPreferredBy, ({ one }) => ({
+meal: one(meals, { fields: [mealPreferredBy.mealId], references: [meals.id] }),
+familyMember: one(familyMembers, { fields: [mealPreferredBy.familyMemberId], references: [familyMembers.id] }),
 }));

@@ -1,5 +1,4 @@
 -- 0002_family_and_enhancements.sql
-
 -- Add new columns to meals
 ALTER TABLE meals ADD COLUMN cost REAL;
 ALTER TABLE meals ADD COLUMN protein_type TEXT CHECK(protein_type IN ('chicken','red_meat','pork','fish','vegetarian','vegan','other'));

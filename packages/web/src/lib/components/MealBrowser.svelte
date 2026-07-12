@@ -46,6 +46,7 @@
     isSpecialOccasion: null,
     maxCost: null,
     suitableForMemberIds: [],
+    preferredByMemberIds: [],
   });
 
   onMount(async () => {
@@ -74,6 +75,7 @@
       if (filters.isSpecialOccasion !== null) params.isSpecialOccasion = String(filters.isSpecialOccasion);
       if (filters.maxCost !== null) params.maxCost = String(filters.maxCost);
       if (filters.suitableForMemberIds.length) params.suitableForMemberIds = filters.suitableForMemberIds.join(',');
+      if (filters.preferredByMemberIds.length) params.preferredByMemberIds = filters.preferredByMemberIds.join(',');
       meals = await api.getMeals(params) as Meal[];
     } finally {
       loading = false;
@@ -92,6 +94,12 @@
       : [...filters.suitableForMemberIds, id];
   }
 
+  function togglePreferredMember(id: number) {
+    filters.preferredByMemberIds = filters.preferredByMemberIds.includes(id)
+      ? filters.preferredByMemberIds.filter((m) => m !== id)
+      : [...filters.preferredByMemberIds, id];
+  }
+
   function clearFilters() {
     filters = {
       search: '',
@@ -108,6 +116,7 @@
       isSpecialOccasion: null,
       maxCost: null,
       suitableForMemberIds: [],
+      preferredByMemberIds: [],
     };
     loadMeals();
   }
@@ -134,7 +143,8 @@
     (filters.leftoverBehaviour ? 1 : 0) +
     (filters.isFavourite !== null ? 1 : 0) +
     (filters.isSpecialOccasion !== null ? 1 : 0) +
-    (filters.suitableForMemberIds.length > 0 ? 1 : 0)
+    (filters.suitableForMemberIds.length > 0 ? 1 : 0) +
+    (filters.preferredByMemberIds.length > 0 ? 1 : 0)
   );
 
   const PROTEIN_LABELS: Record<string, string> = {
@@ -292,6 +302,21 @@
                   onclick={() => { toggleMember(m.id); loadMeals(); }}
                   class="text-xs px-3 py-1.5 rounded-full border transition-colors"
                   style="{filters.suitableForMemberIds.includes(m.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
+                >
+                  {m.name}
+                </button>
+              {/each}
+            </div>
+          </div>
+
+          <div>
+            <div class="text-xs font-semibold uppercase mb-2" style="color: var(--color-text-muted)">Preference</div>
+            <div class="flex flex-wrap gap-2">
+              {#each familyMembers as m}
+                <button
+                  onclick={() => { togglePreferredMember(m.id); loadMeals(); }}
+                  class="text-xs px-3 py-1.5 rounded-full border transition-colors"
+                  style="{filters.preferredByMemberIds.includes(m.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
                 >
                   {m.name}
                 </button>

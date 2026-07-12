@@ -68,6 +68,8 @@ export interface Meal {
   updatedAt: string;
   dietaryTypes: DietaryType[];
   ingredients: MealIngredientEntry[];
+  suitableForMemberIds: number[];
+  preferredByMemberIds: number[];
 }
 
 export interface MealPlan {
@@ -118,6 +120,7 @@ export interface MealFormData {
   notes: string;
   dietaryTypeIds: number[];
   suitableForMemberIds: number[];
+  preferredByMemberIds: number[];
   ingredients: {
     ingredientId: number;
     quantity: number;
@@ -141,6 +144,7 @@ export interface MealFilters {
   isSpecialOccasion: boolean | null;
   maxCost: number | null;
   suitableForMemberIds: number[];
+  preferredByMemberIds: number[];
 }
 
 export interface FamilyMember {

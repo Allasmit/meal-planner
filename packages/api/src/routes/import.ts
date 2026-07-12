@@ -5,6 +5,7 @@ import {
   meals,
   mealIngredients,
   ingredients,
+  ingredientCategories,
   dietaryTypes,
   mealDietaryTypes,
   cuisines,
@@ -14,6 +15,10 @@ import {
 import { eq } from 'drizzle-orm';
 import { requireAuth, type AuthRequest } from '../middleware/auth';
 import { z } from 'zod';
+import multer from 'multer';
+import pdfParse from 'pdf-parse';
+import { createWorker, PSM, OEM } from 'tesseract.js';
+import sharp from 'sharp';
 
 export const importRouter = Router();
 importRouter.use(requireAuth);
@@ -82,6 +87,22 @@ function normalizeMealCategory(value: string | null | undefined): 'dinner' | 'br
   if (['snack', 'snacks'].includes(normalized)) return 'snack';
 
   return null;
+}
+
+function guessCategoryFromName(name: string): string {
+  const n = name.toLowerCase();
+  if (/\b(chicken|beef|pork|lamb|mince|steak|sausage|bacon|ham|turkey|veal|duck|wors|boerewors|biltong)\b/.test(n)) return 'Meat & Poultry';
+  if (/\b(salmon|tuna|cod|hake|prawn|shrimp|fish|mussel|anchovy|sardine|calamari|crayfish)\b/.test(n)) return 'Seafood';
+  if (/\b(milk|cream|butter|cheese|yoghurt|yogurt|egg|cheddar|mozzarella|parmesan|feta|ricotta|cream cheese)\b/.test(n)) return 'Dairy & Eggs';
+  if (/\b(bread|roll|bun|tortilla|pita|naan|croissant|wrap)\b/.test(n)) return 'Bakery';
+  if (/\b(cumin|paprika|turmeric|coriander seed|cinnamon|oregano|thyme|rosemary|bay leaf|chilli flakes|nutmeg|cardamom|clove|cayenne|star anise|allspice)\b/.test(n)) return 'Spices & Herbs';
+  if (/\b(sauce|ketchup|mustard|mayonnaise|vinegar|soy sauce|oyster sauce|fish sauce|hot sauce|worcestershire|pesto|sriracha|hoisin)\b/.test(n)) return 'Condiments & Sauces';
+  if (/\b(canned|tinned|passata|coconut milk|chickpeas|lentils|kidney beans|black beans|baked beans)\b/.test(n)) return 'Canned & Jarred';
+  if (/\b(frozen)\b/.test(n)) return 'Frozen';
+  if (/\b(juice|wine|beer|stock|broth|coffee|tea|cooldrink|cola)\b/.test(n)) return 'Beverages';
+  if (/\b(flour|sugar|rice|pasta|noodle|oil|salt|pepper|baking powder|yeast|oats|breadcrumb|cornstarch|cornflour|honey|syrup|coconut cream)\b/.test(n)) return 'Pantry & Dry Goods';
+  if (/\b(onion|garlic|carrot|potato|tomato|lettuce|spinach|kale|broccoli|pepper|celery|cucumber|mushroom|zucchini|courgette|leek|avocado|lemon|lime|apple|banana|ginger|parsley|coriander|basil|mint|spring onion|butternut|sweet potato|beetroot|cabbage|cauliflower|aubergine|eggplant|chilli|herb)\b/.test(n)) return 'Produce';
+  return 'Other';
 }
 
 type CsvCell = string | number | boolean | null | undefined;
@@ -222,7 +243,7 @@ function collectTexts($: cheerio.CheerioAPI, root: any, selectors: string[]): st
   const values: string[] = [];
 
   for (const selector of selectors) {
-    root.find(selector).each((_, el) => {
+    root.find(selector).each((_: any, el: any) => {
       const text = normalizeExtractedText($(el).text());
       if (text) values.push(text);
     });
@@ -239,7 +260,7 @@ function collectSectionTexts(
 ): string[] {
   const values: string[] = [];
 
-  root.find('h1,h2,h3,h4,h5,h6,strong,b').each((_, el) => {
+  root.find('h1,h2,h3,h4,h5,h6,strong,b').each((_: any, el: any) => {
     const heading = normalizeExtractedText($(el).text());
     if (!headingPattern.test(heading)) return;
 
@@ -251,7 +272,7 @@ function collectSectionTexts(
       if (/^h[1-6]$/.test(tagName)) break;
 
       if (current.is('ul,ol')) {
-        current.find('li').each((__, item) => {
+        current.find('li').each((_: any, item: any) => {
           const text = normalizeExtractedText($(item).text());
           if (text) values.push(text);
         });
@@ -270,6 +291,7 @@ function collectSectionTexts(
   const directMatches = collectTexts($, root, itemSelectors);
   return Array.from(new Set([...values, ...directMatches])).filter(Boolean);
 }
+
 function parseRecipeObject($: cheerio.CheerioAPI, recipe: any): ParsedRecipe {
   const name = normalizeExtractedText(recipe.name) || 'Imported Recipe';
   const description = normalizeExtractedText(
@@ -325,14 +347,16 @@ function parseRecipeObject($: cheerio.CheerioAPI, recipe: any): ParsedRecipe {
     : (recipe.recipeCategory ?? recipe.recipeType);
   const mealCategory = normalizeMealCategory(categoryRaw);
 
-  const dietaryTypeNames: string[] = [];
-  for (const diet of toStringArray(recipe.suitableForDiet)) {
-    const lower = diet.toLowerCase().replace(/https?:\/\/schema\.org\//i, '');
-    if (lower.includes('glutenfree') || lower.includes('gluten-free')) dietaryTypeNames.push('Gluten Free');
-    if (lower.includes('dairyfree') || lower.includes('dairy-free')) dietaryTypeNames.push('Dairy Free');
-    if (lower.includes('vegan')) dietaryTypeNames.push('Vegan');
-    if (lower.includes('vegetarian')) dietaryTypeNames.push('Vegetarian');
-  }
+const dietaryTypeNames: string[] = [];
+for (const diet of toStringArray(recipe.suitableForDiet)) {
+  const lower = diet.toLowerCase().replace(/https?:\/\/schema\.org\//i, '');
+  if (lower.includes('glutenfree') || lower.includes('gluten-free')) dietaryTypeNames.push('Gluten-Free');
+  if (lower.includes('dairyfree') || lower.includes('dairy-free')) dietaryTypeNames.push('Dairy-Free');
+  if (lower.includes('vegan')) dietaryTypeNames.push('Vegan');
+  if (lower.includes('vegetarian')) dietaryTypeNames.push('Vegetarian');
+  if (lower.includes('kidney')) dietaryTypeNames.push('Kidney Safe');
+  if (lower.includes('anti-inflammatory') || lower.includes('anti inflammatory') || lower.includes('antiinflammatory')) dietaryTypeNames.push('Anti-Inflammatory');
+}
 
   let estimatedCost: number | null = null;
   if (recipe.estimatedCost != null) {
@@ -387,7 +411,7 @@ function extractRecipeFromJsonLd(html: string): ParsedRecipe | null {
   let result: ParsedRecipe | null = null;
 
   $('script[type="application/ld+json"]').each((_, el) => {
-    if (result) return; // already found one
+    if (result) return;
     const content = $(el).html();
     if (!content) return;
     try {
@@ -578,6 +602,93 @@ function extractRecipeFromHtml(html: string): ParsedRecipe | null {
   return extractRecipeFromJsonLd(html) ?? extractRecipeFromMicrodata(html) ?? extractRecipeFromDomFallback(html);
 }
 
+// ─── Import overrides type & upload middleware (must be declared before routes that use them) ─
+
+type ImportOverrides = {
+  sourceUrl?: string | null;
+  cost?: number | null;
+  proteinType?: 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'other' | null;
+  mealCategory?: 'dinner' | 'breakfast' | 'lunch' | 'baking' | 'treat' | 'snack' | null;
+  leftoverBehaviour?: 'consumed_same' | 'fridge_next_day' | 'freezable';
+  isFavourite?: boolean;
+  isSpecialOccasion?: boolean;
+  notes?: string;
+};
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 15 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedMime = new Set([
+      'application/pdf',
+      'image/png',
+      'image/jpeg',
+      'image/jpg',
+      'image/webp',
+      'image/heic',
+      'image/heif',
+    ]);
+
+    if (allowedMime.has(file.mimetype)) {
+      cb(null, true);
+      return;
+    }
+
+    cb(new Error('Unsupported file type. Use PDF or image files.'));
+  },
+});
+
+function parseBoolInput(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+  const v = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'y'].includes(v)) return true;
+  if (['false', '0', 'no', 'n'].includes(v)) return false;
+  return undefined;
+}
+
+function parseOptionalNumberInput(value: unknown): number | null | undefined {
+  if (value == null || value === '') return undefined;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const n = Number(value.trim());
+  if (!Number.isFinite(n)) return undefined;
+  return n;
+}
+
+function parseOptionalStringInput(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function parseImportOverrides(body: Record<string, unknown>): ImportOverrides {
+  const protein = parseOptionalStringInput(body.proteinType);
+  const mealCategoryRaw = parseOptionalStringInput(body.mealCategory);
+  const leftover = parseOptionalStringInput(body.leftoverBehaviour);
+
+  const proteinTypeAllowed = new Set(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']);
+  const leftoverAllowed = new Set(['consumed_same', 'fridge_next_day', 'freezable']);
+
+  const parsedMealCategory = normalizeMealCategory(mealCategoryRaw ?? null);
+
+  return {
+    sourceUrl: parseOptionalStringInput(body.sourceUrl) ?? undefined,
+    cost: parseOptionalNumberInput(body.cost),
+    proteinType: protein && proteinTypeAllowed.has(protein)
+      ? (protein as 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'other')
+      : undefined,
+    mealCategory: parsedMealCategory ?? undefined,
+    leftoverBehaviour: leftover && leftoverAllowed.has(leftover)
+      ? (leftover as 'consumed_same' | 'fridge_next_day' | 'freezable')
+      : undefined,
+    isFavourite: parseBoolInput(body.isFavourite),
+    isSpecialOccasion: parseBoolInput(body.isSpecialOccasion),
+  };
+}
+
 // ─── POST /api/import/url ─────────────────────────────────────────────────────
 
 importRouter.post('/url', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -633,80 +744,19 @@ importRouter.post('/url', async (req: AuthRequest, res: Response): Promise<void>
     return;
   }
 
-  const ingredientIds: { name: string; id: number; quantity: number; unit: string }[] = [];
-  for (const raw of recipe.ingredientStrings) {
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-    const match = trimmed.match(/^([\d./½⅓⅔¼¾]+)?\s*([a-zA-Z]+)?\s+(.+)$/);
-    const quantity = match?.[1] ? parseFloat(match[1]) || 1 : 1;
-    const unit = match?.[2] ?? 'unit';
-    const name = match?.[3] ?? trimmed;
-
-    let [existing] = await db.select({ id: ingredients.id }).from(ingredients).where(eq(ingredients.name, name)).limit(1);
-    if (!existing) {
-      [existing] = await db.insert(ingredients).values({ name, defaultUnit: unit }).returning({ id: ingredients.id });
-    }
-    ingredientIds.push({ name, id: existing.id, quantity, unit });
-  }
-
   try {
-    const [meal] = await db.insert(meals).values({
-      name: recipe.name,
-      description: recipe.description,
-      prepTimeMinutes: recipe.prepTimeMinutes,
-      cookTimeMinutes: recipe.cookTimeMinutes,
-      servings: recipe.servings,
-      instructions: JSON.stringify(recipe.instructions),
-      imageUrl: recipe.imageUrl,
-      isTested: false,
+    const created = await persistRecipe(recipe, req.user!.userId, {
       sourceUrl: parsed.data.sourceUrl ?? parsed.data.url,
-      cost: parsed.data.cost ?? recipe.estimatedCost ?? null,
-      mealCategory: parsed.data.mealCategory ?? recipe.mealCategory ?? null,
-      proteinType: parsed.data.proteinType ?? null,
-      leftoverBehaviour: parsed.data.leftoverBehaviour ?? 'consumed_same',
-      isFavourite: parsed.data.isFavourite ?? false,
-      isSpecialOccasion: parsed.data.isSpecialOccasion ?? false,
+      cost: parsed.data.cost,
+      proteinType: parsed.data.proteinType,
+      mealCategory: parsed.data.mealCategory,
+      leftoverBehaviour: parsed.data.leftoverBehaviour,
+      isFavourite: parsed.data.isFavourite,
+      isSpecialOccasion: parsed.data.isSpecialOccasion,
       notes: `Imported from ${parsed.data.url}`,
-      createdByUserId: req.user!.userId,
-      updatedByUserId: req.user!.userId,
-    }).returning();
+    });
 
-    if (ingredientIds.length > 0) {
-      await db.insert(mealIngredients).values(
-        ingredientIds.map((i) => ({ mealId: meal.id, ingredientId: i.id, quantity: i.quantity, unit: i.unit }))
-      );
-    }
-
-    if (recipe.cuisine) {
-      const [cuisine] = await db
-        .select({ id: cuisines.id })
-        .from(cuisines)
-        .where(eq(cuisines.name, recipe.cuisine))
-        .limit(1);
-
-      if (cuisine) {
-        await db.update(meals).set({ cuisineId: cuisine.id }).where(eq(meals.id, meal.id));
-      }
-    }
-
-    if (recipe.dietaryTypeNames.length > 0) {
-      for (const dietaryTypeName of recipe.dietaryTypeNames) {
-        const [dietaryType] = await db
-          .select({ id: dietaryTypes.id })
-          .from(dietaryTypes)
-          .where(eq(dietaryTypes.name, dietaryTypeName))
-          .limit(1);
-
-        if (dietaryType) {
-          await db.insert(mealDietaryTypes).values({
-            mealId: meal.id,
-            dietaryTypeId: dietaryType.id,
-          });
-        }
-      }
-    }
-
-    res.status(201).json({ id: meal.id, name: meal.name, ingredientCount: ingredientIds.length });
+    res.status(201).json(created);
   } catch (error: any) {
     console.error(error);
     res.status(422).json({
@@ -970,7 +1020,8 @@ importRouter.post('/csv', async (req: AuthRequest, res: Response): Promise<void>
   res.json({ created, errors, results });
 });
 
-// POST /api/import/parse-html  (browser fetched the HTML, server just parses it)
+// ─── POST /api/import/parse-html ──────────────────────────────────────────────
+
 importRouter.post('/parse-html', async (req: AuthRequest, res: Response): Promise<void> => {
   const schema = z.object({
     html: z.string().min(1),
@@ -989,89 +1040,25 @@ importRouter.post('/parse-html', async (req: AuthRequest, res: Response): Promis
     return;
   }
 
-  const { html, sourceUrl } = parsed.data;
-
-  const recipe = extractRecipeFromHtml(html);
+  const recipe = extractRecipeFromHtml(parsed.data.html);
   if (!recipe) {
     res.status(422).json({ error: 'No supported recipe data found on that page. The site may not expose JSON-LD, microdata, or usable recipe markup.' });
     return;
   }
 
-  const ingredientIds: { name: string; id: number; quantity: number; unit: string }[] = [];
-  for (const raw of recipe.ingredientStrings) {
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-    const match = trimmed.match(/^([\d./½⅓⅔¼¾]+)?\s*([a-zA-Z]+)?\s+(.+)$/);
-    const quantity = match?.[1] ? parseFloat(match[1]) || 1 : 1;
-    const unit = match?.[2] ?? 'unit';
-    const name = match?.[3] ?? trimmed;
-
-    let [existing] = await db.select({ id: ingredients.id }).from(ingredients).where(eq(ingredients.name, name)).limit(1);
-    if (!existing) {
-      [existing] = await db.insert(ingredients).values({ name, defaultUnit: unit }).returning({ id: ingredients.id });
-    }
-    ingredientIds.push({ name, id: existing.id, quantity, unit });
-  }
-
   try {
-    const [meal] = await db.insert(meals).values({
-      name: recipe.name,
-      description: recipe.description,
-      prepTimeMinutes: recipe.prepTimeMinutes,
-      cookTimeMinutes: recipe.cookTimeMinutes,
-      servings: recipe.servings,
-      instructions: JSON.stringify(recipe.instructions),
-      imageUrl: recipe.imageUrl,
-      isTested: false,
-      sourceUrl: sourceUrl ?? null,
-      cuisineId: null,
-      cost: parsed.data.cost ?? recipe.estimatedCost ?? null,
-      mealCategory: parsed.data.mealCategory ?? recipe.mealCategory ?? null,
-      proteinType: parsed.data.proteinType ?? null,
-      leftoverBehaviour: parsed.data.leftoverBehaviour ?? 'consumed_same',
-      isFavourite: parsed.data.isFavourite ?? false,
-      isSpecialOccasion: parsed.data.isSpecialOccasion ?? false,
-      notes: sourceUrl ? `Imported from ${sourceUrl}` : 'Imported from URL',
-      createdByUserId: req.user!.userId,
-      updatedByUserId: req.user!.userId,
-    }).returning();
+    const created = await persistRecipe(recipe, req.user!.userId, {
+      sourceUrl: parsed.data.sourceUrl ?? null,
+      cost: parsed.data.cost,
+      proteinType: parsed.data.proteinType,
+      mealCategory: parsed.data.mealCategory,
+      leftoverBehaviour: parsed.data.leftoverBehaviour,
+      isFavourite: parsed.data.isFavourite,
+      isSpecialOccasion: parsed.data.isSpecialOccasion,
+      notes: parsed.data.sourceUrl ? `Imported from ${parsed.data.sourceUrl}` : 'Imported from pasted HTML',
+    });
 
-    if (ingredientIds.length > 0) {
-      await db.insert(mealIngredients).values(
-        ingredientIds.map((i) => ({ mealId: meal.id, ingredientId: i.id, quantity: i.quantity, unit: i.unit }))
-      );
-    }
-
-    if (recipe.cuisine) {
-      const [cuisine] = await db
-        .select({ id: cuisines.id })
-        .from(cuisines)
-        .where(eq(cuisines.name, recipe.cuisine))
-        .limit(1);
-
-      if (cuisine) {
-        await db.update(meals).set({ cuisineId: cuisine.id }).where(eq(meals.id, meal.id));
-      }
-    }
-
-    if (recipe.dietaryTypeNames.length > 0) {
-      for (const dietaryTypeName of recipe.dietaryTypeNames) {
-        const [dietaryType] = await db
-          .select({ id: dietaryTypes.id })
-          .from(dietaryTypes)
-          .where(eq(dietaryTypes.name, dietaryTypeName))
-          .limit(1);
-
-        if (dietaryType) {
-          await db.insert(mealDietaryTypes).values({
-            mealId: meal.id,
-            dietaryTypeId: dietaryType.id,
-          });
-        }
-      }
-    }
-
-    res.status(201).json({ id: meal.id, name: meal.name, ingredientCount: ingredientIds.length });
+    res.status(201).json(created);
   } catch (error: any) {
     console.error(error);
     res.status(422).json({
@@ -1079,3 +1066,292 @@ importRouter.post('/parse-html', async (req: AuthRequest, res: Response): Promis
     });
   }
 });
+
+// ─── POST /api/import/media ───────────────────────────────────────────────────
+
+importRouter.post('/media', upload.single('file'), async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: 'file field required' });
+      return;
+    }
+
+    const isPdf = file.mimetype === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf');
+
+    let extractedText = '';
+    let capturedImageUrl: string | null = null;
+
+    if (isPdf) {
+      extractedText = await extractTextFromPdf(file.buffer);
+    } else {
+      [extractedText, capturedImageUrl] = await Promise.all([
+        extractTextFromImage(file.buffer),
+        extractImageDataUrl(file.buffer),
+      ]);
+    }
+
+    if (!extractedText || extractedText.length < 20) {
+      res.status(422).json({
+        error: 'Could not extract enough text from file. Try a clearer image/PDF or crop to ingredients and instructions.',
+      });
+      return;
+    }
+
+    const recipe = extractRecipeFromPlainText(extractedText);
+    if (!recipe) {
+      res.status(422).json({
+        error: 'No recipe structure found in extracted text. Make sure the file includes title, ingredients, or instructions.',
+      });
+      return;
+    }
+
+    // Use the uploaded image as the recipe image if none was parsed from text
+    if (capturedImageUrl && !recipe.imageUrl) {
+      recipe.imageUrl = capturedImageUrl;
+    }
+
+    const overrides = parseImportOverrides((req.body ?? {}) as Record<string, unknown>);
+    const sourceUrl = parseOptionalStringInput((req.body ?? {}).sourceUrl);
+
+    const created = await persistRecipe(recipe, req.user!.userId, {
+      ...overrides,
+      sourceUrl: sourceUrl ?? null,
+      notes: sourceUrl
+        ? `Imported from uploaded media (${sourceUrl})`
+        : `Imported from uploaded media file: ${file.originalname}`,
+    });
+
+    res.status(201).json(created);
+  } catch (error: any) {
+    console.error(error);
+    res.status(422).json({
+      error: error?.cause?.message ?? error?.message ?? 'Failed to import uploaded file',
+    });
+  }
+});
+
+// ─── Shared persistence helpers ───────────────────────────────────────────────
+
+async function resolveIngredientIds(recipe: ParsedRecipe): Promise<{ name: string; id: number; quantity: number; unit: string }[]> {
+  const ingredientIds: { name: string; id: number; quantity: number; unit: string }[] = [];
+
+  for (const raw of recipe.ingredientStrings) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+
+    const match = trimmed.match(/^([\d./½⅓⅔¼¾]+)?\s*([a-zA-Z]+)?\s+(.+)$/);
+    const quantity = match?.[1] ? parseFloat(match[1]) || 1 : 1;
+    const unit = match?.[2] ?? 'unit';
+    const name = match?.[3] ?? trimmed;
+
+    let [existing] = await db
+      .select({ id: ingredients.id, categoryId: ingredients.categoryId })
+      .from(ingredients)
+      .where(eq(ingredients.name, name))
+      .limit(1);
+
+    if (!existing) {
+      const guessedCatName = guessCategoryFromName(name);
+      const [cat] = await db
+        .select({ id: ingredientCategories.id })
+        .from(ingredientCategories)
+        .where(eq(ingredientCategories.name, guessedCatName))
+        .limit(1);
+
+      [existing] = await db
+        .insert(ingredients)
+        .values({ name, defaultUnit: unit, categoryId: cat?.id ?? null })
+        .returning({ id: ingredients.id, categoryId: ingredients.categoryId });
+    }
+
+    ingredientIds.push({ name, id: existing.id, quantity, unit });
+  }
+
+  return ingredientIds;
+}
+
+async function persistRecipe(
+  recipe: ParsedRecipe,
+  userId: number,
+  overrides: ImportOverrides
+): Promise<{ id: number; name: string; ingredientCount: number }> {
+  const ingredientIds = await resolveIngredientIds(recipe);
+
+  const [meal] = await db.insert(meals).values({
+    name: recipe.name,
+    description: recipe.description,
+    prepTimeMinutes: recipe.prepTimeMinutes,
+    cookTimeMinutes: recipe.cookTimeMinutes,
+    servings: recipe.servings,
+    instructions: JSON.stringify(recipe.instructions),
+    imageUrl: recipe.imageUrl,
+    isTested: false,
+    sourceUrl: overrides.sourceUrl ?? null,
+    cost: overrides.cost ?? recipe.estimatedCost ?? null,
+    mealCategory: overrides.mealCategory ?? recipe.mealCategory ?? null,
+    proteinType: overrides.proteinType ?? null,
+    leftoverBehaviour: overrides.leftoverBehaviour ?? 'consumed_same',
+    isFavourite: overrides.isFavourite ?? false,
+    isSpecialOccasion: overrides.isSpecialOccasion ?? false,
+    notes: overrides.notes ?? 'Imported recipe',
+    createdByUserId: userId,
+    updatedByUserId: userId,
+  }).returning();
+
+  if (ingredientIds.length > 0) {
+    await db.insert(mealIngredients).values(
+      ingredientIds.map((i) => ({
+        mealId: meal.id,
+        ingredientId: i.id,
+        quantity: i.quantity,
+        unit: i.unit,
+      }))
+    );
+  }
+
+  if (recipe.cuisine) {
+    const [cuisine] = await db
+      .select({ id: cuisines.id })
+      .from(cuisines)
+      .where(eq(cuisines.name, recipe.cuisine))
+      .limit(1);
+
+    if (cuisine) {
+      await db.update(meals).set({ cuisineId: cuisine.id }).where(eq(meals.id, meal.id));
+    }
+  }
+
+  if (recipe.dietaryTypeNames.length > 0) {
+    for (const dietaryTypeName of recipe.dietaryTypeNames) {
+      const [dietaryType] = await db
+        .select({ id: dietaryTypes.id })
+        .from(dietaryTypes)
+        .where(eq(dietaryTypes.name, dietaryTypeName))
+        .limit(1);
+
+      if (dietaryType) {
+        await db.insert(mealDietaryTypes).values({
+          mealId: meal.id,
+          dietaryTypeId: dietaryType.id,
+        });
+      }
+    }
+  }
+
+  return { id: meal.id, name: meal.name, ingredientCount: ingredientIds.length };
+}
+
+// ─── Plain text / OCR parsing ─────────────────────────────────────────────────
+
+function cleanLine(line: string): string {
+  return normalizeExtractedText(
+    line
+      .replace(/^[\-\u2022\u2023\u25E6\u2043\u2219*]+\s*/, '')
+      .replace(/^\d+[\).:-]\s*/, '')
+      .trim()
+  );
+}
+
+function splitBlocksFromText(text: string): string[] {
+  return text
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => cleanLine(line))
+    .filter(Boolean);
+}
+
+function extractRecipeFromPlainText(text: string): ParsedRecipe | null {
+  const lines = splitBlocksFromText(text);
+  if (lines.length === 0) return null;
+
+  const ingredientHeadingIndex = lines.findIndex((l) => /^(ingredients?)$/i.test(l));
+  const instructionHeadingIndex = lines.findIndex((l) => /^(instructions?|directions?|method)$/i.test(l));
+
+  const name = lines[0] || 'Imported Recipe';
+  const description = lines[1] && !/^(ingredients?|instructions?|directions?|method)$/i.test(lines[1]) ? lines[1] : '';
+
+  let ingredientLines: string[] = [];
+  let instructionLines: string[] = [];
+
+  if (ingredientHeadingIndex >= 0) {
+    const end = instructionHeadingIndex > ingredientHeadingIndex ? instructionHeadingIndex : lines.length;
+    ingredientLines = lines.slice(ingredientHeadingIndex + 1, end);
+  }
+
+  if (instructionHeadingIndex >= 0) {
+    instructionLines = lines.slice(instructionHeadingIndex + 1);
+  }
+
+  if (ingredientLines.length === 0 || instructionLines.length === 0) {
+    const ingredientPattern = /\b(\d+([./]\d+)?|½|⅓|⅔|¼|¾)\b|\b(cup|cups|tbsp|tsp|g|kg|ml|l|oz|lb|clove|cloves|slice|slices)\b/i;
+    const guessedIngredients = lines.filter((l) => ingredientPattern.test(l) && l.length <= 120);
+    const guessedInstructions = lines.filter((l) => !ingredientPattern.test(l) && l.length > 20);
+
+    if (ingredientLines.length === 0) ingredientLines = guessedIngredients.slice(0, 80);
+    if (instructionLines.length === 0) instructionLines = guessedInstructions.slice(0, 80);
+  }
+
+  if (ingredientLines.length === 0 && instructionLines.length === 0) return null;
+
+  return {
+    name,
+    description,
+    prepTimeMinutes: 0,
+    cookTimeMinutes: 0,
+    servings: 2,
+    instructions: instructionLines,
+    ingredientStrings: ingredientLines,
+    imageUrl: null,
+    cuisine: null,
+    mealCategory: null,
+    dietaryTypeNames: [],
+    estimatedCost: null,
+  };
+}
+
+async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  const parsed = await pdfParse(buffer);
+  return (parsed.text || '').trim();
+}
+
+async function extractTextFromImage(buffer: Buffer): Promise<string> {
+  let processedBuffer: Buffer;
+  try {
+    const meta = await sharp(buffer).metadata();
+    const width = meta.width ?? 0;
+    processedBuffer = await sharp(buffer)
+      .grayscale()
+      .normalize()
+      .sharpen()
+      .resize(Math.max(width, 2000), null, { fit: 'inside', withoutEnlargement: false })
+      .png()
+      .toBuffer();
+  } catch {
+    processedBuffer = buffer;
+  }
+
+  const worker = await createWorker('eng', OEM.LSTM_ONLY);
+  try {
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.AUTO,
+      preserve_interword_spaces: '1',
+    });
+    const { data } = await worker.recognize(processedBuffer);
+    return (data.text || '').trim();
+  } finally {
+    await worker.terminate();
+  }
+}
+
+async function extractImageDataUrl(buffer: Buffer): Promise<string | null> {
+  try {
+    const compressed = await sharp(buffer)
+      .resize(900, 900, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+    return `data:image/jpeg;base64,${compressed.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}

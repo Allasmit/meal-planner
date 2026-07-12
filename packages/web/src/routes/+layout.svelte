@@ -67,7 +67,7 @@
   {@render children()}
 {:else if $isLoggedIn}
   <div class="flex flex-col min-h-screen" style="background: var(--color-bg)">
-    <header class="text-white px-4 py-3 flex items-center justify-between shadow-md sticky top-0 z-40" style="background: var(--color-header-bg)">
+    <header class="text-white px-4 py-3 flex items-center justify-between shadow-md sticky top-0 z-40 print:hidden" style="background: var(--color-header-bg)">
       <span class="font-bold text-lg">🥘 Meal Planner</span>
       <div class="flex items-center gap-3">
         <span class="text-sm opacity-80">{$auth.user?.displayName}</span>
@@ -79,10 +79,10 @@
         >{darkMode ? '☀️' : '🌙'}</button>
       </div>
     </header>
-    <main class="flex-1 pb-20">
+    <main class="flex-1 pb-20 print:pb-0">
       {@render children()}
     </main>
-    <nav class="fixed bottom-0 left-0 right-0 border-t flex z-40" style="background: var(--color-nav-bg); border-color: var(--color-border)">
+    <nav class="fixed bottom-0 left-0 right-0 border-t flex z-40 print:hidden" style="background: var(--color-nav-bg); border-color: var(--color-border)">
       {#each navItems as item}
         <a
           href={item.href}

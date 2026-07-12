@@ -74,3 +74,69 @@ body {
   color: var(--color-text);
   border-color: var(--color-border);
 }
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 12mm;
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .dark {
+    --color-bg: #fff;
+    --color-surface: #fff;
+    --color-border: #d1d5db;
+    --color-text: #000;
+    --color-text-muted: #444;
+    --color-accent: #000;
+    --color-accent-hover: #000;
+    --color-accent-light: #fff;
+    --color-accent-text: #000;
+    --color-danger: #000;
+    --color-danger-light: #fff;
+    --color-nav-bg: #fff;
+    --color-header-bg: #fff;
+  }
+
+  a {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+
+  button,
+  nav,
+  header,
+  .fixed,
+  .sticky {
+    box-shadow: none !important;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  tr,
+  td,
+  th {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print\:hidden {
+    display: none !important;
+  }
+}

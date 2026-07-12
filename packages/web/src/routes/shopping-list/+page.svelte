@@ -108,6 +108,18 @@
       <p class="text-sm text-center" style="color: {shareError.startsWith('✅') ? 'var(--color-accent)' : 'var(--color-danger)'}">{shareError}</p>
     {/if}
 
+    <div class="flex items-center gap-2">
+      <input
+        id="showSpices"
+        type="checkbox"
+        checked={showSpices}
+        onchange={toggleSpices}
+        class="w-4 h-4 accent-green-600"
+      />
+      <label for="showSpices" class="text-sm" style="color: var(--color-text-muted)">
+        Show spices and pantry items
+      </label>
+    </div>
     <!-- Categories -->
     {#each list as cat}
       <div class="rounded-xl shadow-sm overflow-hidden" style="background: var(--color-surface); border: 1px solid var(--color-border)">
@@ -131,15 +143,4 @@
   {/if}
 </div>
 
-<div class="flex items-center gap-2">
-  <input
-    id="showSpices"
-    type="checkbox"
-    checked={showSpices}
-    onchange={toggleSpices}
-    class="w-4 h-4 accent-green-600"
-  />
-  <label for="showSpices" class="text-sm" style="color: var(--color-text-muted)">
-    Show spices and pantry items
-  </label>
-</div>
+

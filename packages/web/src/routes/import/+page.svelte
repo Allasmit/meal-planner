@@ -27,16 +27,22 @@
   let htmlError = $state('');
 
   // CSV import
-  let csvFile = $state<File | null>(null);
+  let csvFile = $state<FileList | null>(null);
   let csvLoading = $state(false);
   let csvResult = $state<{ created: number; errors: number; results: any[] } | null>(null);
   let csvError = $state('');
+
+  // Media import (image / screenshot / camera / PDF)
+  let mediaFile = $state<FileList | null>(null);
+  let mediaSourceUrl = $state('');
+  let mediaLoading = $state(false);
+  let mediaResult = $state<MealResult | null>(null);
+  let mediaError = $state('');
 
   async function importFromUrl() {
     urlError = '';
     urlResult = null;
     urlLoading = true;
-
     try {
       urlResult = await api.importUrl({ url }) as any;
     } catch (e: any) {
@@ -61,14 +67,12 @@
     bulkResult = null;
 
     const urls = extractUrls(bulkUrls);
-
     if (urls.length === 0) {
       bulkError = 'Enter at least one URL';
       return;
     }
 
     bulkLoading = true;
-
     try {
       const settled = await Promise.allSettled(
         urls.map(async (currentUrl) => api.importUrl({ url: currentUrl }))
@@ -77,13 +81,8 @@
       const results = settled.map((entry, index) => {
         const currentUrl = urls[index];
         if (entry.status === 'fulfilled') {
-          return {
-            row: index + 1,
-            url: currentUrl,
-            status: 'created' as const,
-          };
+          return { row: index + 1, url: currentUrl, status: 'created' as const };
         }
-
         return {
           row: index + 1,
           url: currentUrl,
@@ -114,7 +113,6 @@
     }
 
     htmlLoading = true;
-
     try {
       htmlResult = await api.importParseHtml({
         html: htmlText,
@@ -128,18 +126,36 @@
   }
 
   async function importCsv() {
-    if (!csvFile) return;
+    if (!csvFile?.[0]) return;
     csvError = '';
     csvResult = null;
     csvLoading = true;
-
     try {
-      const csvText = await csvFile.text();
+      const csvText = await csvFile[0].text();
       csvResult = await api.importCsv(csvText) as any;
     } catch (e: any) {
       csvError = e.message;
     } finally {
       csvLoading = false;
+    }
+  }
+
+  async function importMediaFile() {
+    if (!mediaFile?.[0]) return;
+    mediaError = '';
+    mediaResult = null;
+    mediaLoading = true;
+    try {
+      const formData = new FormData();
+      formData.append('file', mediaFile[0]);
+      if (mediaSourceUrl.trim()) {
+        formData.append('sourceUrl', mediaSourceUrl.trim());
+      }
+      mediaResult = await api.importMedia(formData) as any;
+    } catch (e: any) {
+      mediaError = e.message;
+    } finally {
+      mediaLoading = false;
     }
   }
 
@@ -151,15 +167,14 @@
 <div class="max-w-3xl mx-auto p-4 space-y-8">
   <h1 class="text-xl font-bold text-gray-800">Import Meals</h1>
 
+  <!-- Import from URL -->
   <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
     <div>
       <div class="font-semibold text-gray-800">📎 Import from URL</div>
       <p class="text-sm text-gray-500 mt-1">
         Paste a recipe URL from AllRecipes, BBC Good Food, Food Network, Serious Eats, or similar sites.
-        The server will extract the recipe data and import it as a meal.
       </p>
     </div>
-
     <div class="flex gap-2">
       <input
         type="url"
@@ -175,11 +190,9 @@
         {urlLoading ? 'Importing…' : 'Import'}
       </button>
     </div>
-
     {#if urlError}
       <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{urlError}</div>
     {/if}
-
     {#if urlResult}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
         ✅ <strong>{urlResult.name}</strong> imported with {urlResult.ingredientCount} ingredients.
@@ -188,15 +201,14 @@
     {/if}
   </div>
 
+  <!-- Paste Page HTML -->
   <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
     <div>
       <div class="font-semibold text-gray-800">🌐 Paste Page HTML</div>
       <p class="text-sm text-gray-500 mt-1">
-        Use this when the site blocks server-side fetching or when the recipe data is only visible in the browser.
-        Copy the page source or rendered HTML, then paste it here.
+        Use this when the site blocks server-side fetching. Copy the page source and paste it here.
       </p>
     </div>
-
     <div class="space-y-2">
       <label class="block text-sm font-medium text-gray-700">Source URL</label>
       <input
@@ -206,30 +218,16 @@
         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
       />
     </div>
-
     <div class="space-y-2">
       <label class="block text-sm font-medium text-gray-700">HTML</label>
       <textarea
         bind:value={htmlText}
         rows="10"
         spellcheck="false"
-        placeholder="<html>...</html>
-        Option 1: View Page Source (gets the raw HTML)
-        - Press Ctrl+U (Windows) — this opens the raw HTML in a new tab
-        - Open the recipe page in your browser
-        - Press Ctrl+A to select all, then Ctrl+C to copy
-        - Paste into the HTML field in the import page
-        
-        Option 2: Copy Rendered HTML (better for JS-heavy sites)
-        - Open the recipe page
-        - Press F12 to open DevTools
-        - In the Elements tab, right-click the html tag at the top
-        - Click Copy → Copy outerHTML
-        Paste into the HTML field"
+        placeholder="<html>...</html>"
         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono overflow-x-auto focus:outline-none focus:ring-2 focus:ring-green-500"
-      />
+      ></textarea>
     </div>
-
     <button
       onclick={importFromHtml}
       disabled={htmlLoading || !htmlText.trim()}
@@ -237,11 +235,9 @@
     >
       {htmlLoading ? 'Importing…' : 'Import HTML'}
     </button>
-
     {#if htmlError}
       <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{htmlError}</div>
     {/if}
-
     {#if htmlResult}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
         ✅ <strong>{htmlResult.name}</strong> imported with {htmlResult.ingredientCount} ingredients.
@@ -250,14 +246,12 @@
     {/if}
   </div>
 
+  <!-- Bulk URL Import -->
   <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
     <div>
       <div class="font-semibold text-gray-800">📚 Bulk URL Import</div>
-      <p class="text-sm text-gray-500 mt-1">
-        Paste one recipe URL per line. Each URL will be imported separately using the normal URL importer.
-      </p>
+      <p class="text-sm text-gray-500 mt-1">Paste one recipe URL per line.</p>
     </div>
-
     <div class="space-y-2">
       <label class="block text-sm font-medium text-gray-700">Recipe URLs</label>
       <textarea
@@ -265,12 +259,10 @@
         rows="8"
         wrap="off"
         spellcheck="false"
-        placeholder="https://example.com/recipe-1
-https://example.com/recipe-2"
+        placeholder="https://example.com/recipe-1&#10;https://example.com/recipe-2"
         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono overflow-x-auto focus:outline-none focus:ring-2 focus:ring-green-500"
-      />
+      ></textarea>
     </div>
-
     <button
       onclick={importBulkUrls}
       disabled={bulkLoading || !bulkUrls.trim()}
@@ -278,11 +270,9 @@ https://example.com/recipe-2"
     >
       {bulkLoading ? 'Importing…' : 'Import URLs'}
     </button>
-
     {#if bulkError}
       <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{bulkError}</div>
     {/if}
-
     {#if bulkResult}
       <div class="space-y-2">
         <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
@@ -291,7 +281,6 @@ https://example.com/recipe-2"
             · <span class="text-amber-700">{bulkResult.errors} failed</span>
           {/if}
         </div>
-
         {#if bulkResult.errors > 0}
           <div class="space-y-1">
             {#each bulkResult.results.filter((r) => r.status === 'error') as row}
@@ -305,50 +294,20 @@ https://example.com/recipe-2"
     {/if}
   </div>
 
+  <!-- CSV Import -->
   <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
     <div>
       <div class="font-semibold text-gray-800">📊 Import from CSV / Excel</div>
       <p class="text-sm text-gray-500 mt-1">
-        Download the template, fill it in Excel or Google Sheets, save as CSV, then upload here.
-        You can import multiple meals at once.
+        Download the template, fill it in, save as CSV, then upload here.
       </p>
     </div>
-
     <button
       onclick={downloadTemplate}
       class="text-sm border border-gray-200 rounded-lg px-4 py-2 hover:bg-gray-50 transition-colors"
     >
       ⬇️ Download CSV Template
     </button>
-
-    <details class="text-xs text-gray-500">
-      <summary class="cursor-pointer hover:text-gray-700">CSV column reference</summary>
-      <div class="mt-2 space-y-1 pl-2 border-l-2 border-gray-100">
-        <p><strong>name</strong> — meal name, required</p>
-        <p><strong>description</strong> — short description</p>
-        <p><strong>prep_time_minutes</strong> — number</p>
-        <p><strong>cook_time_minutes</strong> — number</p>
-        <p><strong>servings</strong> — number</p>
-        <p><strong>difficulty</strong> — easy, medium, or hard</p>
-        <p><strong>cuisine</strong> — must match an existing cuisine name</p>
-        <p><strong>cost</strong> — estimated cost</p>
-        <p><strong>protein_type</strong> — chicken, red_meat, pork, fish, lamb, other</p>
-        <p><strong>meal_category</strong> — dinner, breakfast, lunch, baking, treat, snack</p>
-        <p><strong>leftover_behaviour</strong> — consumed_same, fridge_next_day, freezable</p>
-        <p><strong>source_url</strong> — source recipe URL</p>
-        <p><strong>image_url</strong> — photo URL</p>
-        <p><strong>is_tested</strong> — true / false</p>
-        <p><strong>is_favourite</strong> — true / false</p>
-        <p><strong>is_special_occasion</strong> — true / false</p>
-        <p><strong>notes</strong> — free text</p>
-        <p><strong>dietary_types</strong> — pipe-separated dietary type names</p>
-        <p><strong>suitable_for</strong> — pipe-separated family member names</p>
-        <p><strong>instructions</strong> — steps separated by |</p>
-        <p><strong>ingredients</strong> — each as name:quantity:unit[:notes] separated by |</p>
-        <p class="mt-1 text-gray-400">Example: Flour:500:g|Eggs:3:whole|Butter:100:g</p>
-      </div>
-    </details>
-
     <div class="space-y-2">
       <label class="block text-sm font-medium text-gray-700">CSV file</label>
       <input
@@ -358,22 +317,65 @@ https://example.com/recipe-2"
         class="block w-full text-sm text-gray-700 file:mr-4 file:rounded-lg file:border-0 file:bg-gray-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-gray-800 hover:file:bg-gray-200"
       />
     </div>
-
     <button
       onclick={importCsv}
-      disabled={csvLoading || !csvFile}
+      disabled={csvLoading || !csvFile?.[0]}
       class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
     >
       {csvLoading ? 'Importing…' : 'Import CSV'}
     </button>
-
     {#if csvError}
       <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{csvError}</div>
     {/if}
-
     {#if csvResult}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
         ✅ {csvResult.created} created, {csvResult.errors} errors
+      </div>
+    {/if}
+  </div>
+
+  <!-- Media Import -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
+    <div>
+      <div class="font-semibold text-gray-800">📷 Import from Image / PDF / Camera</div>
+      <p class="text-sm text-gray-500 mt-1">
+        Upload a screenshot, phone camera photo, or PDF recipe. The server extracts text and creates a meal.
+      </p>
+    </div>
+    <div class="space-y-2">
+      <label class="block text-sm font-medium text-gray-700">Optional source URL</label>
+      <input
+        type="url"
+        bind:value={mediaSourceUrl}
+        placeholder="https://example.com/recipe"
+        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+      />
+    </div>
+    <div class="space-y-2">
+      <label class="block text-sm font-medium text-gray-700">Recipe file</label>
+      <input
+        type="file"
+        accept="image/*,application/pdf,.pdf"
+        capture="environment"
+        bind:files={mediaFile}
+        class="block w-full text-sm text-gray-700 file:mr-4 file:rounded-lg file:border-0 file:bg-gray-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-gray-800 hover:file:bg-gray-200"
+      />
+      <p class="text-xs text-gray-500">Mobile: this can open your camera directly for a quick photo.</p>
+    </div>
+    <button
+      onclick={importMediaFile}
+      disabled={mediaLoading || !mediaFile?.[0]}
+      class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
+    >
+      {mediaLoading ? 'Importing…' : 'Import Media'}
+    </button>
+    {#if mediaError}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{mediaError}</div>
+    {/if}
+    {#if mediaResult}
+      <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+        ✅ <strong>{mediaResult.name}</strong> imported with {mediaResult.ingredientCount} ingredients.
+        <a href="/meals/{mediaResult.id}" class="underline ml-2">View recipe →</a>
       </div>
     {/if}
   </div>

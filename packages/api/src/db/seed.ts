@@ -16,6 +16,8 @@ async function seed() {
       { name: 'Low-Carb', icon: '🥩' },
       { name: 'High-Protein', icon: '💪' },
       { name: 'Nut-Free', icon: '🥜' },
+      { name: 'Kidney Safe', icon: '🩺' },
+      { name: 'Anti-Inflammatory', icon: '🌿' },
     ])
     .onConflictDoNothing();
 

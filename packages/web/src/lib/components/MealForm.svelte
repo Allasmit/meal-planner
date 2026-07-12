@@ -17,6 +17,9 @@
   let ingredientSearch = $state('');
   let selectedIngredientCategoryId = $state<number | null>(null);
 
+  let imageError = $state('');
+  let imageBusy = $state(false);
+
   let form = $state<MealFormData>({
     name: '',
     description: '',
@@ -38,6 +41,7 @@
     notes: '',
     dietaryTypeIds: [],
     suitableForMemberIds: [],
+    preferredByMemberIds: [],
     ingredients: [],
   });
 
@@ -73,6 +77,7 @@
         notes: meal.notes ?? '',
         dietaryTypeIds: meal.dietaryTypes.map((d: DietaryType) => d.id),
         suitableForMemberIds: meal.suitableForMemberIds ?? [],
+        preferredByMemberIds: meal.preferredByMemberIds ?? [],
         ingredients: meal.ingredients.map((i: any) => ({
           ingredientId: i.id,
           quantity: i.quantity,
@@ -117,6 +122,12 @@
       : [...form.suitableForMemberIds, id];
   }
 
+  function togglePreferredMember(id: number) {
+    form.preferredByMemberIds = form.preferredByMemberIds.includes(id)
+      ? form.preferredByMemberIds.filter((m) => m !== id)
+      : [...form.preferredByMemberIds, id];
+  }
+
   async function updateIngredientCategory(ingredientId: number, categoryId: number | null) {
     await api.updateIngredient(ingredientId, { categoryId });
     allIngredients = allIngredients.map((ingredient) =>
@@ -124,11 +135,17 @@
     );
   }
 
-  let filteredIngredients = $derived(
+    let filteredIngredients = $derived(
     allIngredients.filter(
-      (i) => i.name.toLowerCase().includes(ingredientSearch.toLowerCase()) &&
+      (i) =>
+        i.name.toLowerCase().includes(ingredientSearch.toLowerCase()) &&
         !form.ingredients.find((fi) => fi.ingredientId === i.id)
     )
+  );
+
+  let normalizedIngredientSearch = $derived(ingredientSearch.trim().toLowerCase());
+  let exactIngredientMatch = $derived(
+    allIngredients.find((i) => i.name.trim().toLowerCase() === normalizedIngredientSearch) ?? null
   );
 
   function addIngredient(ing: Ingredient) {
@@ -145,16 +162,104 @@
   }
 
   async function createAndAddIngredient() {
-    if (!ingredientSearch.trim()) return;
-    const ing = await api.createIngredient({
-      name: ingredientSearch.trim(),
-      categoryId: selectedIngredientCategoryId,
-    }) as Ingredient;
-    allIngredients = [...allIngredients, ing];
-    addIngredient(ing);
-    selectedIngredientCategoryId = null;
+    const name = ingredientSearch.trim();
+    if (!name) return;
+
+    if (exactIngredientMatch) {
+      if (!form.ingredients.find((fi) => fi.ingredientId === exactIngredientMatch.id)) {
+        addIngredient(exactIngredientMatch);
+      } else {
+        ingredientSearch = '';
+      }
+      selectedIngredientCategoryId = null;
+      return;
+    }
+
+    try {
+      const body: { name: string; categoryId?: number } = { name };
+      if (selectedIngredientCategoryId !== null) {
+        body.categoryId = selectedIngredientCategoryId;
+      }
+
+      const ing = await api.createIngredient(body) as Ingredient;
+      allIngredients = [...allIngredients, ing];
+      addIngredient(ing);
+      selectedIngredientCategoryId = null;
+    } catch (e: any) {
+      error = e?.message ?? 'Failed to create ingredient';
+    }
   }
 
+
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(new Error('Failed to read image file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function compressImageFile(file: File): Promise<string> {
+    // Lightweight client-side compression to stay below request size limits.
+    const bitmap = await createImageBitmap(file);
+    const maxW = 1200;
+    const maxH = 1200;
+    const scale = Math.min(maxW / bitmap.width, maxH / bitmap.height, 1);
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return fileToDataUrl(file);
+    }
+
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    return canvas.toDataURL('image/jpeg', 0.82);
+  }
+
+  async function setImageFromFile(file: File | null) {
+    imageError = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      imageError = 'Please choose an image file.';
+      return;
+    }
+
+    imageBusy = true;
+    try {
+      form.imageUrl = await compressImageFile(file);
+    } catch (e: any) {
+      imageError = e?.message ?? 'Failed to process image.';
+    } finally {
+      imageBusy = false;
+    }
+  }
+
+  async function onImageFileChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    await setImageFromFile(file);
+    input.value = '';
+  }
+
+  async function onImagePaste(event: ClipboardEvent) {
+    const items = Array.from(event.clipboardData?.items ?? []);
+    const imageItem = items.find((i) => i.type.startsWith('image/'));
+    if (!imageItem) return;
+
+    event.preventDefault();
+    const file = imageItem.getAsFile();
+    await setImageFromFile(file);
+  }
+
+  function clearImage() {
+    form.imageUrl = '';
+    imageError = '';
+  }  
   const PROTEIN_OPTIONS = [
     { value: 'chicken', label: '🍗 Chicken' },
     { value: 'red_meat', label: '🥩 Red Meat' },
@@ -233,9 +338,51 @@
       <label class="label">Source URL (optional)</label>
       <input type="url" bind:value={form.sourceUrl} class="input" placeholder="https://…" />
     </div>
-    <div class="flex items-center gap-2">
-      <input type="checkbox" id="isTested" bind:checked={form.isTested} class="w-4 h-4 accent-green-600" />
-      <label for="isTested" class="text-sm" style="color: var(--color-text)">I have tested this recipe ✅</label>
+    <div onpaste={onImagePaste}>
+      <label class="label">{mealId && !form.imageUrl ? 'Add Image' : 'Image (URL, upload, or paste)'}</label>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <input
+          type="url"
+          bind:value={form.imageUrl}
+          class="input flex-1 min-w-[16rem]"
+          placeholder="https://example.com/meal.jpg"
+        />
+
+        <label class="text-sm px-3 py-2 rounded-lg border cursor-pointer"
+          style="border-color: var(--color-border); color: var(--color-text)">
+          {imageBusy ? 'Processing...' : 'Upload'}
+          <input type="file" accept="image/*" class="hidden" onchange={onImageFileChange} disabled={imageBusy} />
+        </label>
+
+        <button
+          type="button"
+          onclick={clearImage}
+          class="text-sm px-3 py-2 rounded-lg border"
+          style="border-color: var(--color-border); color: var(--color-text-muted)">
+          Clear
+        </button>
+      </div>
+
+      <p class="text-xs mt-1" style="color: var(--color-text-muted)">
+        Tip: click Upload, or paste an image from clipboard with Ctrl+V.
+      </p>
+
+      {#if imageError}
+        <p class="text-xs mt-2" style="color: var(--color-danger)">{imageError}</p>
+      {/if}
+    </div>
+
+    {#if form.imageUrl}
+      <div class="overflow-hidden rounded-xl" style="border: 1px solid var(--color-border)">
+        <img src={form.imageUrl} alt="Meal preview" class="block w-full max-h-64 object-cover" loading="lazy" />
+      </div>
+    {/if}  
+    <div>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" bind:checked={form.isTested} class="w-4 h-4 accent-green-600" />
+        <span class="text-sm" style="color: var(--color-text)">I have tested this recipe ✅</span>
+      </label>
     </div>
   </div>
 
@@ -311,7 +458,7 @@
     </div>
   </div>
 
-  <!-- Suitable for family members -->
+  <!-- Family members -->
   {#if familyMembers.length > 0}
     <div class="rounded-xl shadow-sm p-4" style="background: var(--color-surface); border: 1px solid var(--color-border)">
       <div class="label mb-2">Suitable For</div>
@@ -321,6 +468,20 @@
           <button type="button" onclick={() => toggleMember(m.id)}
             class="text-sm px-3 py-1.5 rounded-full border transition-colors"
             style="{form.suitableForMemberIds.includes(m.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}">
+            {m.name}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="rounded-xl shadow-sm p-4" style="background: var(--color-surface); border: 1px solid var(--color-border)">
+      <div class="label mb-2">Preference</div>
+      <p class="text-xs mb-3" style="color: var(--color-text-muted)">Select who especially prefers this meal.</p>
+      <div class="flex flex-wrap gap-2">
+        {#each familyMembers as m}
+          <button type="button" onclick={() => togglePreferredMember(m.id)}
+            class="text-sm px-3 py-1.5 rounded-full border transition-colors"
+            style="{form.preferredByMemberIds.includes(m.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}">
             {m.name}
           </button>
         {/each}
@@ -372,21 +533,26 @@
         {/each}
       </select>
 
-      {#if ingredientSearch && filteredIngredients.length > 0}
-        <div class="absolute z-10 top-full left-0 right-0 border rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto" style="background: var(--color-surface); border-color: var(--color-border)">
+      {#if ingredientSearch}
+        <div class="absolute z-10 top-full left-0 right-0 border rounded-lg shadow-lg mt-1 max-h-56 overflow-y-auto" style="background: var(--color-surface); border-color: var(--color-border)">
           {#each filteredIngredients.slice(0, 10) as ing}
             <button type="button" onclick={() => addIngredient(ing)}
               class="w-full text-left px-3 py-2 text-sm border-b" style="border-color: var(--color-border); color: var(--color-text)">
               {ing.name} {ing.defaultUnit ? `(${ing.defaultUnit})` : ''}
             </button>
           {/each}
-        </div>
-      {:else if ingredientSearch && filteredIngredients.length === 0}
-        <div class="absolute z-10 top-full left-0 right-0 border rounded-lg shadow-lg mt-1" style="background: var(--color-surface); border-color: var(--color-border)">
-          <button type="button" onclick={createAndAddIngredient}
-            class="w-full text-left px-3 py-2 text-sm" style="color: var(--color-accent)">
-            + Create "{ingredientSearch}"
-          </button>
+
+          {#if !exactIngredientMatch}
+            <button type="button" onclick={createAndAddIngredient}
+              class="w-full text-left px-3 py-2 text-sm" style="color: var(--color-accent)">
+              + Create "{ingredientSearch}"
+            </button>
+          {:else if !form.ingredients.find((fi) => fi.ingredientId === exactIngredientMatch.id)}
+            <button type="button" onclick={() => addIngredient(exactIngredientMatch)}
+              class="w-full text-left px-3 py-2 text-sm" style="color: var(--color-accent)">
+              + Add existing "{exactIngredientMatch.name}"
+            </button>
+          {/if}
         </div>
       {/if}
     </div>
