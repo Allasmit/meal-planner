@@ -19,10 +19,10 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
 
   const showHidden = req.query.showHidden === 'true';
 
-  const start = new Date(weekStart);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  const weekEnd = end.toISOString().split('T')[0];
+  const [wsYear, wsMonth, wsDay] = weekStart.split('-').map(Number);
+  const weekEnd = new Date(Date.UTC(wsYear, wsMonth - 1, wsDay + 6))
+    .toISOString()
+    .slice(0, 10);
 
   const plans = await db
     .select({ mealId: mealPlans.mealId, servings: mealPlans.servings })
@@ -143,10 +143,10 @@ plannerRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =>
     return;
   }
 
-  const start = new Date(weekStart);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  const weekEnd = end.toISOString().split('T')[0];
+  const [wsYear, wsMonth, wsDay] = weekStart.split('-').map(Number);
+  const weekEnd = new Date(Date.UTC(wsYear, wsMonth - 1, wsDay + 6))
+    .toISOString()
+    .slice(0, 10);
 
   const result = await db
     .select({
@@ -327,7 +327,8 @@ plannerRouter.post('/auto-generate', async (req: AuthRequest, res: Response): Pr
   const suggestions: { date: string; slot: string; mealId: number | null; notes: string | null }[] = [];
 
   for (const day of parsed.data.days) {
-    const dayOfWeek = new Date(day.date).getDay();
+    const [dayYear, dayMonth, dayDate] = day.date.split('-').map(Number);
+    const dayOfWeek = new Date(Date.UTC(dayYear, dayMonth - 1, dayDate)).getUTCDay();
     const leftoversNeeded = day.leftoversRequired ?? defaultLeftoversDays.includes(dayOfWeek);
 
     // Base candidates: filter on hard constraints only (prep time limit, protein/category weekly caps)
