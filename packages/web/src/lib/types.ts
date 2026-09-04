@@ -85,6 +85,8 @@ export interface MealPlan {
   mealCookTime: number | null;
   mealDifficulty: Difficulty | null;
   assignedByDisplayName: string | null;
+  /** Present locally only: this entry is queued for sync and not yet confirmed by the server. */
+  _pendingSync?: boolean;
 }
 
 export interface ShoppingListCategory {

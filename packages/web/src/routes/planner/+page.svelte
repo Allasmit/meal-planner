@@ -205,7 +205,7 @@
                   {#if plan?.mealName}
                     <div class="rounded-lg p-2 relative group" style="background: var(--color-accent-light); border: 1px solid var(--color-accent)">
                       <a href="/meals/{plan.mealId}" class="block">
-                        <div class="font-medium text-xs leading-tight" style="color: var(--color-accent-text)">{plan.mealName}</div>
+                        <div class="font-medium text-xs leading-tight" style="color: var(--color-accent-text)">{plan.mealName}{plan._pendingSync ? ' ⏳' : ''}</div>
                         {#if plan.mealDifficulty}
                           <span class="inline-block text-xs px-1.5 py-0.5 rounded mt-1 {DIFFICULTY_COLORS[plan.mealDifficulty]}">{plan.mealDifficulty}</span>
                         {/if}
@@ -243,7 +243,7 @@
               <div class="px-4 py-2 flex items-center gap-3">
                 <span class="text-xs w-16 shrink-0" style="color: var(--color-text-muted)">{SLOT_LABELS[slot]}</span>
                 {#if plan?.mealName}
-                  <a href="/meals/{plan.mealId}" class="flex-1 text-sm font-medium" style="color: var(--color-accent-text)">{plan.mealName}</a>
+                  <a href="/meals/{plan.mealId}" class="flex-1 text-sm font-medium" style="color: var(--color-accent-text)">{plan.mealName}{plan._pendingSync ? ' ⏳' : ''}</a>
                   <button onclick={() => openPicker(dateStr, slot)} class="text-xs" style="color: var(--color-text-muted)" title="Swap">⇄</button>
                   <button onclick={() => clearSlot(dateStr, slot)} class="text-sm" style="color: var(--color-text-muted)">✕</button>
                 {:else}

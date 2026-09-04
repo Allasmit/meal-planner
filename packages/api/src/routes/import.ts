@@ -765,6 +765,173 @@ importRouter.post('/url', async (req: AuthRequest, res: Response): Promise<void>
   }
 });
 
+// ─── POST /api/import/social ──────────────────────────────────────────────────
+// Import a recipe shared on a social media post (Instagram, TikTok, Facebook,
+// Pinterest, X/Twitter, YouTube, etc.). Most of these platforms block
+// server-side fetching or hide the real content behind a login wall, so this
+// endpoint tries a best-effort fetch first (structured recipe data, then the
+// post's caption/description meta tags plus any visible comments — recipe
+// details are often posted in the comments rather than the caption), and
+// otherwise falls back to whatever caption/comment text the user pasted in
+// manually.
+
+function extractSocialTextFromHtml($: cheerio.CheerioAPI): { text: string | null; imageUrl: string | null } {
+  const metaDescription = firstNonEmpty([
+    $('meta[property="og:description"]').attr('content'),
+    $('meta[name="description"]').attr('content'),
+    $('meta[name="twitter:description"]').attr('content'),
+  ]);
+
+  const metaTitle = firstNonEmpty([
+    $('meta[property="og:title"]').attr('content'),
+    $('meta[name="twitter:title"]').attr('content'),
+    $('title').first().text(),
+  ]);
+
+  const imageUrl = firstNonEmpty([
+    $('meta[property="og:image"]').attr('content'),
+    $('meta[property="og:image:secure_url"]').attr('content'),
+    $('meta[name="twitter:image"]').attr('content'),
+    $('meta[name="twitter:image:src"]').attr('content'),
+  ]);
+
+  const parts = [metaTitle, metaDescription]
+    .map((part) => normalizeExtractedText(part))
+    .filter(Boolean);
+
+  return { text: parts.length ? parts.join('\n\n') : null, imageUrl };
+}
+
+function extractCommentTextsFromHtml($: cheerio.CheerioAPI): string[] {
+  const selectors = [
+    '[class*="comment" i]',
+    '[data-testid*="comment" i]',
+    '[id*="comment" i]',
+    '[aria-label*="comment" i]',
+    'ul[class*="Comments" i] li',
+    'ol[class*="Comments" i] li',
+  ];
+
+  const values: string[] = [];
+  for (const selector of selectors) {
+    $(selector).each((_, el) => {
+      const text = normalizeExtractedText($(el).text());
+      // Skip noise like "12 comments" / "View all comments" links and
+      // duplicate/overly long blocks (likely whole-page containers, not a
+      // single comment).
+      if (text && text.length > 5 && text.length < 500 && !/^\d+\s+comments?$/i.test(text) && !/^(view|load|see)\s+.*comments?/i.test(text)) {
+        values.push(text);
+      }
+    });
+  }
+
+  return Array.from(new Set(values)).slice(0, 200);
+}
+
+importRouter.post('/social', async (req: AuthRequest, res: Response): Promise<void> => {
+  const schema = z
+    .object({
+      url: z.string().url().optional(),
+      caption: z.string().optional(),
+      comments: z.string().optional(),
+      sourceUrl: z.string().url().optional(),
+      cost: z.number().min(0).optional().nullable(),
+      proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']).optional().nullable(),
+      mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
+      leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).optional(),
+      isFavourite: z.boolean().optional(),
+      isSpecialOccasion: z.boolean().optional(),
+    })
+    .refine(
+      (data) => (data.url && data.url.trim()) || (data.caption && data.caption.trim()) || (data.comments && data.comments.trim()),
+      { message: 'Provide a post URL, caption text, or comment text' }
+    );
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Provide a post URL, caption text, or comment text' });
+    return;
+  }
+
+  let recipe: ParsedRecipe | null = null;
+  let fallbackImageUrl: string | null = null;
+  const pastedCaption = parsed.data.caption?.trim();
+  const pastedComments = parsed.data.comments?.trim();
+
+  if (parsed.data.url) {
+    try {
+      const response = await fetch(parsed.data.url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (response.ok) {
+        const html = await response.text();
+        recipe = extractRecipeFromHtml(html);
+
+        if (!recipe) {
+          const $ = cheerio.load(html);
+          const { text, imageUrl } = extractSocialTextFromHtml($);
+          fallbackImageUrl = imageUrl;
+          const scrapedComments = extractCommentTextsFromHtml($);
+
+          const combinedText = [pastedCaption, text, pastedComments, ...scrapedComments]
+            .filter(Boolean)
+            .join('\n\n');
+          if (combinedText) {
+            recipe = extractRecipeFromPlainText(combinedText);
+          }
+        }
+      }
+    } catch {
+      // Fetch failed (blocked, timed out, requires login, etc.) — fall through
+      // to parsing the pasted caption/comment text below, if any was provided.
+    }
+  }
+
+  if (!recipe && (pastedCaption || pastedComments)) {
+    const combinedText = [pastedCaption, pastedComments].filter(Boolean).join('\n\n');
+    recipe = extractRecipeFromPlainText(combinedText);
+  }
+
+  if (!recipe) {
+    res.status(422).json({
+      error:
+        'Could not find recipe details from that post. Many apps (Instagram, TikTok, Facebook, Pinterest) block automatic fetching, and recipe details are often only in the comments — open the post, copy the caption and/or the comment with the recipe, and paste it into the fields below.',
+    });
+    return;
+  }
+
+  if (!recipe.imageUrl && fallbackImageUrl) {
+    recipe.imageUrl = fallbackImageUrl;
+  }
+
+  try {
+    const created = await persistRecipe(recipe, req.user!.userId, {
+      sourceUrl: parsed.data.sourceUrl ?? parsed.data.url ?? null,
+      cost: parsed.data.cost,
+      proteinType: parsed.data.proteinType,
+      mealCategory: parsed.data.mealCategory,
+      leftoverBehaviour: parsed.data.leftoverBehaviour,
+      isFavourite: parsed.data.isFavourite,
+      isSpecialOccasion: parsed.data.isSpecialOccasion,
+      notes: parsed.data.url ? `Imported from social post: ${parsed.data.url}` : 'Imported from pasted social media caption/comments',
+    });
+
+    res.status(201).json(created);
+  } catch (error: any) {
+    console.error(error);
+    res.status(422).json({
+      error: error?.cause?.message ?? error?.message ?? 'Failed to import recipe',
+    });
+  }
+});
+
 // ─── GET /api/import/csv-template ─────────────────────────────────────────────
 
 importRouter.get('/csv-template', (_req: AuthRequest, res: Response): void => {
@@ -1056,6 +1223,53 @@ importRouter.post('/parse-html', async (req: AuthRequest, res: Response): Promis
       isFavourite: parsed.data.isFavourite,
       isSpecialOccasion: parsed.data.isSpecialOccasion,
       notes: parsed.data.sourceUrl ? `Imported from ${parsed.data.sourceUrl}` : 'Imported from pasted HTML',
+    });
+
+    res.status(201).json(created);
+  } catch (error: any) {
+    console.error(error);
+    res.status(422).json({
+      error: error?.cause?.message ?? error?.message ?? 'Failed to import recipe',
+    });
+  }
+});
+
+// ─── POST /api/import/text ─────────────────────────────────────────────────────
+
+importRouter.post('/text', async (req: AuthRequest, res: Response): Promise<void> => {
+  const schema = z.object({
+    text: z.string().min(1),
+    sourceUrl: z.string().url().optional(),
+    cost: z.number().min(0).optional().nullable(),
+    proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']).optional().nullable(),
+    mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
+    leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).optional(),
+    isFavourite: z.boolean().optional(),
+    isSpecialOccasion: z.boolean().optional(),
+  });
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'text field required' });
+    return;
+  }
+
+  const recipe = extractRecipeFromPlainText(parsed.data.text);
+  if (!recipe) {
+    res.status(422).json({ error: 'Could not find a recipe title, ingredients, or instructions in that text.' });
+    return;
+  }
+
+  try {
+    const created = await persistRecipe(recipe, req.user!.userId, {
+      sourceUrl: parsed.data.sourceUrl ?? null,
+      cost: parsed.data.cost,
+      proteinType: parsed.data.proteinType,
+      mealCategory: parsed.data.mealCategory,
+      leftoverBehaviour: parsed.data.leftoverBehaviour,
+      isFavourite: parsed.data.isFavourite,
+      isSpecialOccasion: parsed.data.isSpecialOccasion,
+      notes: parsed.data.sourceUrl ? `Imported from ${parsed.data.sourceUrl}` : 'Imported from pasted text',
     });
 
     res.status(201).json(created);

@@ -92,6 +92,10 @@ importers:
         version: 5.9.3
 
   packages/web:
+    dependencies:
+      idb-keyval:
+        specifier: ^6.2.2
+        version: 6.2.5
     devDependencies:
       '@sveltejs/adapter-auto':
         specifier: ^7.0.1

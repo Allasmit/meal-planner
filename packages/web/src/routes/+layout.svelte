@@ -4,6 +4,8 @@
   import { goto } from '$app/navigation';
   import { auth, isLoggedIn } from '$lib/stores/auth';
   import { api } from '$lib/api';
+  import { initSync } from '$lib/offline/sync';
+  import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
 
@@ -17,6 +19,7 @@
   onMount(async () => {
     darkMode = localStorage.getItem('darkMode') === 'true';
     applyDarkMode(darkMode);
+    initSync();
 
     try {
       const status = await api.setupStatus() as any;
@@ -70,6 +73,7 @@
     <header class="text-white px-4 py-3 flex items-center justify-between shadow-md sticky top-0 z-40 print:hidden" style="background: var(--color-header-bg)">
       <span class="font-bold text-lg">🥘 Meal Planner</span>
       <div class="flex items-center gap-3">
+        <OfflineIndicator />
         <span class="text-sm opacity-80">{$auth.user?.displayName}</span>
         <button
           onclick={toggleDarkMode}

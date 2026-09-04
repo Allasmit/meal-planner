@@ -59,8 +59,9 @@ Open **http://localhost:5173** in your browser.
 On first load you are redirected to `/setup` to create the admin account.
 
 > **Windows note:** If `pnpm` or `node` is not found, run this first in each terminal:
+> ```powershell
 > $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
-```raw
+> ```
 
 ---
 
@@ -126,7 +127,7 @@ Menu plan app/
 │       │       └── settings/           <- user management + sign out
 │       ├── vite.config.ts      <- Tailwind + PWA plugins, /api proxy
 │       └── package.json
-```raw
+```
 
 ---
 
@@ -178,6 +179,7 @@ difficulty=easy|medium|hard
 prepTimeMax=30              prep minutes
 ingredientIds=4,7           meals containing ANY of these
 isTested=true|false
+```
 
 ### Planner & Shopping List
 
@@ -222,7 +224,9 @@ Add to `navItems` in `+layout.svelte` for nav bar entry.
 
 1. Add column in `packages/api/src/db/schema.ts`
 2. Create `packages/api/src/db/migrations/0002_my_change.sql`:
+   ```sql
    ALTER TABLE meals ADD COLUMN calories INTEGER;
+   ```
 3. Restart the API — migrations run on startup automatically
 4. Update the Zod schema in `routes/meals.ts`
 5. Add the field to `MealForm.svelte`
@@ -254,217 +258,77 @@ pnpm exec tsx src/db/seed.ts
 
 ---
 
-## Production Deployment (Windows home server)
+## Production Deployment (Home Server / Raspberry Pi)
 
-This project is easiest to run on a Windows machine as a home server with:
-- PM2 for process management
-- Caddy as the reverse proxy on port 80
-- SSH from your dev PC to trigger deployments
-- one SQLite database file at `packages/api/data/mealplan.db`
+### 1. Install Node.js
 
-### Recommended architecture
-
-- Frontend: built SvelteKit app on port 3000
-- API: Express app on port 3001
-- Caddy: listens on port 80 and proxies:
-  - `/api/*` -> `http://127.0.0.1:3001`
-  - `/` -> `http://127.0.0.1:3000`
-
-Browser URL: `http://192.168.1.70`
-
-### 1. Install prerequisites on the server
-
-```powershell
-winget install OpenJS.NodeJS.LTS
-npm install -g pnpm@9.15.9
-npm install -g pm2
-winget install CaddyServer.Caddy
-winget install Git.Git
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+npm install -g pnpm
 ```
 
-### 2. Clone or copy the project
+### 2. Copy the project
 
-```powershell
-mkdir C:\dev
-cd C:\dev
-git clone <your-repo-url> meal-planner
-cd meal-planner
+```bash
+scp -r "Menu plan app" user@192.168.1.x:~/meal-planner
+```
+
+### 3. Install and build
+
+```bash
+cd ~/meal-planner
 pnpm install
+cd packages/web && pnpm build
 ```
 
-If you already have the project locally, keep it in one known folder:
-
-```text
-C:\dev\meal-planner
-```
-
-### 3. Build the app
-
-```powershell
-cd C:\dev\meal-planner
-pnpm install
-pnpm --filter api build
-pnpm --filter web build
-```
-
-Use the same Node + pnpm versions on dev and server (Node 20+, pnpm 9.x).
-
-### 4. Create environment file (`packages/api/.env`)
+### 4. Environment variables — create `packages/api/.env`
 
 ```env
-JWT_SECRET=replace-with-a-long-random-secret
+JWT_SECRET=replace-with-32-plus-random-characters
 NODE_ENV=production
 PORT=3001
-CLIENT_ORIGIN=http://192.168.1.70
+CLIENT_ORIGIN=http://192.168.1.x
 ```
 
-If serving frontend directly on port 3000 (without Caddy), use:
+### 5. Keep servers alive with PM2
 
-```env
-CLIENT_ORIGIN=http://192.168.1.70:3000
+```bash
+npm install -g pm2
+
+pm2 start "pnpm exec tsx src/index.ts" --name meal-api --cwd ~/meal-planner/packages/api
+PORT=3000 pm2 start "node build/index.js" --name meal-web --cwd ~/meal-planner/packages/web
+
+pm2 save && pm2 startup
 ```
 
-### 5. Start app processes with PM2
+### 6. nginx reverse proxy (single port for everything)
 
-```powershell
-cd C:\dev\meal-planner\packages\api
-$env:PORT = "3001"
-$env:NODE_ENV = "production"
-$env:CLIENT_ORIGIN = "http://192.168.1.70"
-pm2 start "pnpm exec tsx src/index.ts" --name meal-api --cwd "C:\dev\meal-planner\packages\api"
+```nginx
+server {
+    listen 80;
 
-cd C:\dev\meal-planner\packages\web
-pm2 start "node build\index.js" --name meal-web --cwd "C:\dev\meal-planner\packages\web"
+    location /api/ {
+        proxy_pass http://localhost:3001;
+        proxy_set_header Cookie $http_cookie;
+    }
 
-pm2 save
-```
-
-Check status:
-
-```powershell
-pm2 list
-pm2 logs meal-api
-pm2 logs meal-web
-```
-
-### 6. Configure Caddy reverse proxy (port 80)
-
-Create:
-
-```text
-C:\caddy\Caddyfile
-```
-
-With:
-
-```caddy
-:80 {
-    @api path /api/*
-    reverse_proxy @api 127.0.0.1:3001
-
-    reverse_proxy 127.0.0.1:3000
-}
-```
-Validate and run:
-
-```powershell
-caddy validate --config C:\caddy\Caddyfile
-caddy run --config C:\caddy\Caddyfile
-```
-
-Open app:
-
-```text
-http://192.168.1.70
-```
-
-### 7. First-run setup and database
-
-On first load, open `/setup` and create the first admin account.
-
-Database path:
-
-```text
-C:\dev\meal-planner\packages\api\data\mealplan.db
-```
-
-Back up this file regularly.
-
-### 8. Deploy updates from dev PC (SSH + script)
-
-On your dev PC, add this function to your PowerShell profile:
-
-```powershell
-function deploy-menu {
-    param(
-        [string]$Branch = "main"
-    )
-
-    ssh Albert@192.168.1.70 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\dev\meal-planner\deploy.ps1 -Branch $Branch"
+    location / {
+        proxy_pass http://localhost:3000;
+    }
 }
 ```
 
-Run deploys with:
-
-```powershell
-deploy-menu main
-deploy-menu feature-ron
-```
-
-### 9. Server deployment script (`C:\dev\meal-planner\deploy.ps1`)
-
-```powershell
-param(
-    [string]$Branch = "main"
-)
-
-$ErrorActionPreference = "Stop"
-Set-Location C:\dev\meal-planner
-
-Write-Host "Fetching latest changes..."
-git fetch origin
-
-Write-Host "Checking out branch: $Branch"
-git checkout $Branch
-git pull --ff-only origin $Branch
-
-Write-Host "Backing up database..."
-$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-New-Item -ItemType Directory -Force -Path "C:\dev\meal-planner\backups" | Out-Null
-Copy-Item "C:\dev\meal-planner\packages\api\data\mealplan.db" "C:\dev\meal-planner\backups\mealplan.db.$timestamp.bak" -Force
-
-Write-Host "Installing dependencies..."
-pnpm install
-
-Write-Host "Building API..."
-pnpm --filter api build
-
-Write-Host "Building web..."
-pnpm --filter web build
-
-Write-Host "Restarting PM2 processes..."
-pm2 restart meal-api --update-env
-pm2 restart meal-web --update-env
-pm2 save
-
-Write-Host "Deployment complete."
-```
-
-### 10. Operational checks
-
-```powershell
-curl http://127.0.0.1:3001/api/auth/setup-status
-pm2 list
-pm2 describe meal-api
-pm2 describe meal-web
-caddy validate --config C:\caddy\Caddyfile
+```bash
+sudo ln -s /etc/nginx/sites-available/mealplanner /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
 ---
 
 ## Accessing from Your Phone
 
-1. Server IP on Windows: run `ipconfig` and find the IPv4 address (for example `192.168.1.70`)
+1. Server IP: run `hostname -I` on the server (e.g. `192.168.1.70`)
 2. Open `http://192.168.1.70` in your phone browser
 3. **Android Chrome:** three-dot menu → *Add to Home screen*
 4. **iOS Safari:** Share icon → *Add to Home Screen*

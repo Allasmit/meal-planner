@@ -26,6 +26,21 @@
   let htmlResult = $state<MealResult | null>(null);
   let htmlError = $state('');
 
+  // Paste plain text import
+  let textSourceUrl = $state('');
+  let plainText = $state('');
+  let textLoading = $state(false);
+  let textResult = $state<MealResult | null>(null);
+  let textError = $state('');
+
+  // Social media post import
+  let socialUrl = $state('');
+  let socialCaption = $state('');
+  let socialComments = $state('');
+  let socialLoading = $state(false);
+  let socialResult = $state<MealResult | null>(null);
+  let socialError = $state('');
+
   // CSV import
   let csvFile = $state<FileList | null>(null);
   let csvLoading = $state(false);
@@ -122,6 +137,51 @@
       htmlError = e.message;
     } finally {
       htmlLoading = false;
+    }
+  }
+
+  async function importFromText() {
+    textError = '';
+    textResult = null;
+
+    if (!plainText.trim()) {
+      textError = 'Paste some recipe text first';
+      return;
+    }
+
+    textLoading = true;
+    try {
+      textResult = await api.importParseText({
+        text: plainText,
+        sourceUrl: textSourceUrl.trim() || undefined,
+      }) as any;
+    } catch (e: any) {
+      textError = e.message;
+    } finally {
+      textLoading = false;
+    }
+  }
+
+  async function importFromSocial() {
+    socialError = '';
+    socialResult = null;
+
+    if (!socialUrl.trim() && !socialCaption.trim() && !socialComments.trim()) {
+      socialError = 'Enter a post URL, or paste the caption or comment text';
+      return;
+    }
+
+    socialLoading = true;
+    try {
+      socialResult = await api.importSocial({
+        url: socialUrl.trim() || undefined,
+        caption: socialCaption.trim() || undefined,
+        comments: socialComments.trim() || undefined,
+      }) as any;
+    } catch (e: any) {
+      socialError = e.message;
+    } finally {
+      socialLoading = false;
     }
   }
 
@@ -242,6 +302,110 @@
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
         ✅ <strong>{htmlResult.name}</strong> imported with {htmlResult.ingredientCount} ingredients.
         <a href="/meals/{htmlResult.id}" class="underline ml-2">View recipe →</a>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Paste Plain Text -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
+    <div>
+      <div class="font-semibold text-gray-800">📝 Paste Plain Text</div>
+      <p class="text-sm text-gray-500 mt-1">
+        Paste a recipe copied from anywhere (notes app, email, a message, etc.). We'll scan the text for a
+        title, ingredients, and instructions automatically.
+      </p>
+    </div>
+    <div class="space-y-2">
+      <label class="block text-sm font-medium text-gray-700">Optional source URL</label>
+      <input
+        type="url"
+        bind:value={textSourceUrl}
+        placeholder="https://example.com/recipe"
+        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+      />
+    </div>
+    <div class="space-y-2">
+      <label class="block text-sm font-medium text-gray-700">Recipe text</label>
+      <textarea
+        bind:value={plainText}
+        rows="10"
+        spellcheck="false"
+        placeholder={"Spaghetti Bolognese\n\nIngredients\n500g minced beef\n400g spaghetti\n...\n\nInstructions\nBrown the mince\nAdd tomatoes and simmer\n..."}
+        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono overflow-x-auto focus:outline-none focus:ring-2 focus:ring-green-500"
+      ></textarea>
+    </div>
+    <button
+      onclick={importFromText}
+      disabled={textLoading || !plainText.trim()}
+      class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
+    >
+      {textLoading ? 'Importing…' : 'Import Text'}
+    </button>
+    {#if textError}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{textError}</div>
+    {/if}
+    {#if textResult}
+      <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+        ✅ <strong>{textResult.name}</strong> imported with {textResult.ingredientCount} ingredients.
+        <a href="/meals/{textResult.id}" class="underline ml-2">View recipe →</a>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Social Media Post Import -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
+    <div>
+      <div class="font-semibold text-gray-800">📱 Import from Social Media Post</div>
+      <p class="text-sm text-gray-500 mt-1">
+        Import a recipe shared on Instagram, TikTok, Facebook, Pinterest, X/Twitter, or YouTube. We'll try
+        to fetch the post automatically (including visible comments, since recipe details are often posted
+        there instead of the caption), but most of these apps block automated access or hide content behind
+        a login — if that happens, paste the caption and/or the comment with the recipe and we'll scan it.
+      </p>
+    </div>
+    <div class="space-y-2">
+      <label class="block text-sm font-medium text-gray-700">Post URL</label>
+      <input
+        type="url"
+        bind:value={socialUrl}
+        placeholder="https://www.instagram.com/p/..."
+        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+      />
+    </div>
+    <div class="space-y-2">
+      <label class="block text-sm font-medium text-gray-700">Caption / post text (paste if the URL fails)</label>
+      <textarea
+        bind:value={socialCaption}
+        rows="6"
+        spellcheck="false"
+        placeholder={"Copy the caption from the post, e.g.\nCreamy Garlic Butter Chicken 🍗\nIngredients:\n- 4 chicken breasts\n- 3 tbsp butter\n...\nMethod:\n1. Season the chicken...\n"}
+        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono overflow-x-auto focus:outline-none focus:ring-2 focus:ring-green-500"
+      ></textarea>
+    </div>
+    <div class="space-y-2">
+      <label class="block text-sm font-medium text-gray-700">Comments (paste the comment with the recipe, if that's where it is)</label>
+      <textarea
+        bind:value={socialComments}
+        rows="6"
+        spellcheck="false"
+        placeholder={"Copy relevant comments, e.g.\n\"Recipe: 500g chicken, 2 cloves garlic, 1 cup cream...\""}
+        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono overflow-x-auto focus:outline-none focus:ring-2 focus:ring-green-500"
+      ></textarea>
+    </div>
+    <button
+      onclick={importFromSocial}
+      disabled={socialLoading || (!socialUrl.trim() && !socialCaption.trim() && !socialComments.trim())}
+      class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
+    >
+      {socialLoading ? 'Importing…' : 'Import Post'}
+    </button>
+    {#if socialError}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{socialError}</div>
+    {/if}
+    {#if socialResult}
+      <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+        ✅ <strong>{socialResult.name}</strong> imported with {socialResult.ingredientCount} ingredients.
+        <a href="/meals/{socialResult.id}" class="underline ml-2">View recipe →</a>
       </div>
     {/if}
   </div>

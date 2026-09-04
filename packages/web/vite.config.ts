@@ -37,13 +37,19 @@ export default defineConfig({
 				runtimeCaching: [
 					{
 						urlPattern: /^\/api\/meals\//,
+						method: 'GET',
 						handler: 'StaleWhileRevalidate',
-						options: { cacheName: 'meal-detail-cache', expiration: { maxEntries: 100, maxAgeSeconds: 7 * 24 * 60 * 60 } },
+						options: { cacheName: 'meal-detail-cache', expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 } },
 					},
 					{
-						urlPattern: /^\/api\/meals$/,
+						urlPattern: /^\/api\/(meals|family|planner|users)(\?.*)?$/,
+						method: 'GET',
 						handler: 'NetworkFirst',
-						options: { cacheName: 'meals-list-cache' },
+						options: {
+							cacheName: 'api-cache',
+							networkTimeoutSeconds: 4,
+							expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 },
+						},
 					},
 				],
 			},
