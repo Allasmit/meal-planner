@@ -406,6 +406,7 @@ function deploy-menu {
 
 Run deploys with:
 
+First push your changes to the remote repo, then on your dev PC:
 ```powershell
 deploy-menu main
 deploy-menu feature-ron

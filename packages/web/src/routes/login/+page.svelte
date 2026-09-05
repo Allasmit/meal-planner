@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
   import { auth } from '$lib/stores/auth';
+  import { runFullPrecache } from '$lib/offline/precache';
 
   let username = $state('');
   let password = $state('');
@@ -14,6 +15,11 @@
     try {
       const user = await api.login({ username, password }) as any;
       auth.setUser(user);
+      // The root layout's onMount (where this also runs) already fired once
+      // before login succeeded, so it never re-triggers on this client-side
+      // navigation - kick it off here instead so offline precaching actually
+      // starts right after a fresh sign-in, not only on a later page reload.
+      runFullPrecache();
       goto('/planner');
     } catch (e: any) {
       error = e.message || 'Login failed';

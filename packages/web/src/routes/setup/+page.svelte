@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
   import { auth } from '$lib/stores/auth';
+  import { runFullPrecache } from '$lib/offline/precache';
   import { onMount } from 'svelte';
 
   let username = $state('');
@@ -25,6 +26,9 @@
     try {
       const user = await api.setup({ username, displayName, password }) as any;
       auth.setUser(user);
+      // See login/+page.svelte - the root layout's onMount already ran before
+      // this and won't fire again on this client-side navigation.
+      runFullPrecache();
       goto('/planner');
     } catch (e: any) {
       error = e.message || 'Setup failed';

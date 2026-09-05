@@ -1,9 +1,21 @@
 import { getCachedGet, setCachedGet } from './offline/cache';
 import { enqueueMutation } from './offline/queue';
 import { applyOptimisticPatch } from './offline/patch';
-import { refreshPendingCount, flushQueue } from './offline/sync';
+import { refreshPendingCount, flushQueue, markSynced, markOffline, isOnline } from './offline/sync';
 
 const BASE = '/api';
+
+// Bounds how long any single request is allowed to hang before we treat it as
+// a network failure and fall back to cache (or fail fast for mutations).
+// WITHOUT this, a fetch() has no timeout of its own: on a real device that's
+// "offline" in the sense of being connected to wifi/cellular with no actual
+// route to the server (rather than Playwright/DevTools' instant
+// ERR_INTERNET_DISCONNECTED simulation), the underlying TCP connection just
+// hangs until the OS's own connect timeout - which can be 30-100+ seconds.
+// Every request on the page (the auth check, page data, etc.) would each
+// hang that long with nothing falling back to cache, which looks exactly
+// like "the page never loads past the spinner".
+const FETCH_TIMEOUT_MS = 6_000;
 
 type MealImportBody = {
   sourceUrl?: string;
@@ -59,8 +71,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // and simple resource mutations (meals/planner/family/users) are deferred.
   const isQueueable = isMutation && !isFormData && !path.startsWith('/auth') && !path.startsWith('/import');
 
-  // Known offline: skip straight to queueing/cache instead of waiting on a doomed fetch.
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+  // Known offline: skip straight to queueing/cache instead of waiting on a
+  // doomed fetch. Checks BOTH `navigator.onLine` (the browser has no network
+  // interface at all) AND `isOnline()` (our own tracked reachability state,
+  // updated whenever a real request has failed) - `navigator.onLine` alone
+  // stays `true` on a device that's associated with wifi/cellular but can't
+  // actually reach the server, which otherwise meant every request paid the
+  // full FETCH_TIMEOUT_MS before falling back to cache, making the app feel
+  // slow instead of behaving like it knows it's offline.
+  if (typeof navigator !== 'undefined' && (!navigator.onLine || !isOnline())) {
     if (isMutation) {
       if (isQueueable) return queueOfflineMutation<T>(path, method, options?.body as string | undefined);
       throw new Error('You are offline. This action requires an internet connection.');
@@ -74,6 +93,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       credentials: 'include',
       headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
       ...options,
+      // NOTE: spread after `...options` so a caller-supplied signal (none
+      // currently pass one) would win; this is our own safety-net timeout.
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
 
     if (!res.ok) {
@@ -91,6 +113,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     }
 
     const data = (await res.json()) as T;
+    markSynced();
     if (!isMutation) {
       setCachedGet(path, data).catch(() => {});
     } else {
@@ -99,8 +122,16 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     }
     return data;
   } catch (err) {
-    // A network failure surfaces as a TypeError from fetch (not our thrown Errors above).
-    if (err instanceof TypeError) {
+    // A real network failure surfaces as a TypeError from fetch(); our own
+    // FETCH_TIMEOUT_MS safety net surfaces as an AbortError/TimeoutError
+    // DOMException (from AbortSignal.timeout) when the request hangs instead
+    // of failing outright. Both mean "couldn't reach the server" and should
+    // be treated the same as being offline.
+    const isNetworkFailure =
+      err instanceof TypeError ||
+      (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError'));
+    if (isNetworkFailure) {
+      markOffline();
       if (isMutation) {
         if (isQueueable) return queueOfflineMutation<T>(path, method, options?.body as string | undefined);
         throw new Error('You are offline. This action requires an internet connection.');

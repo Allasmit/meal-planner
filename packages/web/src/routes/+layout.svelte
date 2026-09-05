@@ -1,10 +1,12 @@
 <script lang="ts">
   import '../app.css';
   import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
+  import { goto, afterNavigate } from '$app/navigation';
   import { auth, isLoggedIn } from '$lib/stores/auth';
   import { api } from '$lib/api';
   import { initSync } from '$lib/offline/sync';
+  import { cacheCurrentPage, clearPageCache } from '$lib/offline/page-cache';
+  import { runFullPrecache } from '$lib/offline/precache';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
@@ -21,15 +23,72 @@
     applyDarkMode(darkMode);
     initSync();
 
+    // Actually register the service worker. vite-plugin-pwa's automatic
+    // <script> injection never runs for SvelteKit's server-rendered HTML, so
+    // without this call the app never installs a service worker and offline
+    // support silently does nothing.
+    if ('serviceWorker' in navigator) {
+      import('virtual:pwa-register').then(({ registerSW }) => {
+        registerSW({ immediate: true });
+      });
+
+      // A new service worker version has just taken control (i.e. a fresh
+      // deploy was picked up). Wipe the cached page-snapshot cache - it may
+      // hold HTML from the previous build referencing hashed asset files
+      // Workbox's precache has already discarded, which otherwise breaks
+      // hydration on a later offline reload (see clearPageCache() for
+      // details). Re-cache the current route immediately so it stays
+      // available offline right away.
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        clearPageCache().then(() => {
+          cacheCurrentPage();
+          // A fresh deploy may have added/changed routes or meals - redo the
+          // full precache (ignoring the usual throttle) so every page and
+          // meal is available offline again under the new build.
+          runFullPrecache({ force: true });
+        });
+      });
+    }
+
+    // Re-run the full offline precache whenever the browser regains
+    // connectivity, so data added/changed while offline (by this device or
+    // others) eventually makes it into the offline cache too. Throttled
+    // internally - this is just reacting to a real connectivity change, not
+    // new background polling.
+    window.addEventListener('online', () => runFullPrecache());
+
     try {
-      const status = await api.setupStatus() as any;
+      // Run both auth checks in parallel rather than sequentially awaiting
+      // one then the other: each is bounded by FETCH_TIMEOUT_MS on its own,
+      // so awaiting them one at a time could stack up to two full timeouts
+      // (12s) before the spinner clears on a device that's "offline" in the
+      // silently-unreachable sense (see api.ts). Running them together
+      // bounds the wait to a single timeout. `api.me()` is expected to
+      // reject with 401 during first-time setup (no admin account exists
+      // yet) - catch it to `null` so that rejection doesn't short-circuit
+      // Promise.all before `status.setupRequired` can be checked below.
+      const [status, user] = await Promise.all([
+        api.setupStatus() as Promise<any>,
+        api.me().catch(() => null) as Promise<any>,
+      ]);
       if (status.setupRequired) { goto('/setup'); return; }
-      const user = await api.me() as any;
+      if (!user) throw new Error('Not authenticated');
       auth.setUser(user);
+      // Logged in and online: proactively cache every page and every meal
+      // so the app works fully offline (like a native app) even for
+      // pages/meals that were never actually opened.
+      runFullPrecache();
     } catch {
       auth.setUser(null);
     }
     auth.setLoading(false);
+  });
+
+  // Cache the current route's full HTML document (for offline reloads) after
+  // every navigation, including the initial one. See page-cache.ts for why
+  // this is needed instead of relying on the service worker alone.
+  afterNavigate(() => {
+    cacheCurrentPage();
   });
 
   function toggleDarkMode() {

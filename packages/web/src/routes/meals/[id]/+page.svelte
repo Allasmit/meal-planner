@@ -1,7 +1,6 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import { DIFFICULTY_COLORS, DIFFICULTY_LABELS } from '$lib/utils';
   import type { Meal } from '$lib/types';
@@ -36,14 +35,31 @@
     freezable: '❄️ Freezable',
   };
 
-  onMount(async () => {
-    try {
-      meal = await api.getMeal(id) as Meal;
-    } catch {
-      goto('/meals');
-    } finally {
-      loading = false;
-    }
+  // SvelteKit reuses this SAME component instance (does NOT remount, so
+  // `onMount` would only ever fire once) when navigating directly between
+  // two URLs that match this same route (e.g. one meal's page to another's,
+  // such as via browser back/forward across two meal-page history entries).
+  // An onMount-only load would then keep showing the PREVIOUS meal - or
+  // whatever state it was in - looking exactly like "clicking a meal did
+  // nothing". Use an $effect keyed on `id` instead so every id change
+  // (including the very first mount) triggers a fresh load. The `requestId`
+  // guard discards a still-in-flight response if `id` changes again before
+  // it resolves, so a slow load for a meal you've since navigated away from
+  // can't clobber the newer one.
+  $effect(() => {
+    const requestId = id;
+    meal = null;
+    loading = true;
+    (async () => {
+      try {
+        const result = await api.getMeal(requestId) as Meal;
+        if (requestId === id) meal = result;
+      } catch {
+        if (requestId === id) goto('/meals');
+      } finally {
+        if (requestId === id) loading = false;
+      }
+    })();
   });
 
   async function deleteMeal() {
