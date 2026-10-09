@@ -15,6 +15,7 @@ export const users = sqliteTable('users', {
   displayName: text('display_name').notNull(),
   passwordHash: text('password_hash').notNull(),
   role: text('role', { enum: ['admin', 'member'] }).notNull().default('member'),
+  tokenVersion: integer('token_version').notNull().default(0),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
 });
 
@@ -65,7 +66,7 @@ export const meals = sqliteTable('meals', {
   // ─── Enhanced fields ─────────────────────────────────────────────────────────
   cost: real('cost'),
   proteinType: text('protein_type', {
-    enum: ['chicken', 'red_meat', 'pork', 'fish', 'vegetarian', 'vegan', 'other'],
+    enum: ['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'vegetarian', 'vegan', 'other'],
   }),
   mealCategory: text('meal_category', {
     enum: ['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack'],

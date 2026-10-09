@@ -49,17 +49,26 @@
     preferredByMemberIds: [],
   });
 
+  let loadSeq = 0;
+  let loadError = $state('');
+
   onMount(async () => {
-    [dietaryTypes, cuisines, familyMembers] = await Promise.all([
-      api.getDietaryTypes() as Promise<DietaryType[]>,
-      api.getCuisines() as Promise<Cuisine[]>,
-      api.getFamilyMembers() as Promise<FamilyMember[]>,
-    ]);
+    // Reference data only feeds the filter chips; a failure there shouldn't stop the meal list loading.
+    try {
+      [dietaryTypes, cuisines, familyMembers] = await Promise.all([
+        api.getDietaryTypes() as Promise<DietaryType[]>,
+        api.getCuisines() as Promise<Cuisine[]>,
+        api.getFamilyMembers() as Promise<FamilyMember[]>,
+      ]);
+    } catch { /* filters just stay empty */ }
     await loadMeals();
   });
 
   async function loadMeals() {
+    // Typing in the search box fires several requests; only the newest one may update the list.
+    const seq = ++loadSeq;
     loading = true;
+    loadError = '';
     try {
       const params: Record<string, string> = {};
       if (filters.search) params.search = filters.search;
@@ -76,9 +85,12 @@
       if (filters.maxCost !== null) params.maxCost = String(filters.maxCost);
       if (filters.suitableForMemberIds.length) params.suitableForMemberIds = filters.suitableForMemberIds.join(',');
       if (filters.preferredByMemberIds.length) params.preferredByMemberIds = filters.preferredByMemberIds.join(',');
-      meals = await api.getMeals(params) as Meal[];
+      const result = await api.getMeals(params) as Meal[];
+      if (seq === loadSeq) meals = result;
+    } catch (e: any) {
+      if (seq === loadSeq) loadError = e?.message ?? 'Could not load meals';
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 
@@ -153,6 +165,8 @@
     pork: '🐷 Pork',
     fish: '🐟 Fish',
     lamb: '🐑 Lamb',
+    vegetarian: '🥦 Vegetarian',
+    vegan: '🌱 Vegan',
     other: '🍲 Other',
   };
   const PROTEIN_COLORS: Record<string, string> = {
@@ -161,6 +175,8 @@
     pork: '#f97316',
     fish: '#3b82f6',
     lamb: '#84cc16',
+    vegetarian: '#22c55e',
+    vegan: '#10b981',
     other: '#8b5cf6',
   };
   const CATEGORY_LABELS: Record<string, string> = {
@@ -396,6 +412,11 @@
     {#if loading}
       <div class="flex justify-center py-10">
         <div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div>
+      </div>
+    {:else if loadError}
+      <div class="text-center py-10 space-y-3">
+        <p class="text-sm" style="color: var(--color-danger)">{loadError}</p>
+        <button onclick={loadMeals} class="text-sm font-semibold px-4 py-2 rounded-xl text-white" style="background: var(--color-accent)">Try again</button>
       </div>
     {:else if meals.length === 0}
       <div class="text-center py-12" style="color: var(--color-text-muted)">

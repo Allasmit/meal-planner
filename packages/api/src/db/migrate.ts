@@ -1,11 +1,26 @@
 import { libsqlClient } from './client';
 import path from 'path';
 import fs from 'fs';
+import { splitSqlStatements } from '../lib/sql';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, 'migrations');
 
-async function applyMigrations() {
-  // Create migrations tracking table if it doesn't exist
+// Migrations that rebuild a table other tables reference must run with foreign
+// keys off, otherwise DROP TABLE cascades into the child rows. Opt in with this
+// marker on the first line of the migration file.
+const FK_OFF_MARKER = '-- migrate:fk-off';
+
+async function backupBeforeMigrating(pendingCount: number, hasHistory: boolean): Promise<void> {
+  if (!hasHistory || pendingCount === 0) return;
+  const backupDir = path.resolve(process.cwd(), 'data', 'backups');
+  fs.mkdirSync(backupDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const target = path.join(backupDir, `mealplan-pre-migration-${stamp}.db`);
+  await libsqlClient.execute(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+  console.log(`Database backed up to ${target}`);
+}
+
+export async function runMigrations(): Promise<void> {
   await libsqlClient.execute(`
     CREATE TABLE IF NOT EXISTS __migrations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,27 +41,42 @@ async function applyMigrations() {
     .readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort();
+  const pending = files.filter((f) => !appliedMigrations.has(f));
 
-  for (const file of files) {
-    if (appliedMigrations.has(file)) continue;
-    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
-    // Strip single-line comments, then split by semicolon
-    const stripped = sql.replace(/--[^\n]*/g, '');
-    const statements = stripped
-      .split(';')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    for (const stmt of statements) {
-      await libsqlClient.execute(stmt);
+  await backupBeforeMigrating(pending.length, appliedMigrations.size > 0);
+
+  for (const file of pending) {
+    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8').replace(/^\uFEFF/, '');
+    const fkOff = sql.trimStart().startsWith(FK_OFF_MARKER);
+    const statements = splitSqlStatements(sql);
+
+    if (fkOff) await libsqlClient.execute('PRAGMA foreign_keys = OFF');
+    try {
+      // batch() runs all statements in one transaction, so a failing migration leaves no partial changes.
+      await libsqlClient.batch(
+        [...statements, { sql: 'INSERT INTO __migrations (name) VALUES (?)', args: [file] }],
+        'write',
+      );
+    } finally {
+      if (fkOff) await libsqlClient.execute('PRAGMA foreign_keys = ON');
     }
-    await libsqlClient.execute({ sql: 'INSERT INTO __migrations (name) VALUES (?)', args: [file] });
+
+    if (fkOff) {
+      const violations = await libsqlClient.execute('PRAGMA foreign_key_check');
+      if (violations.rows.length > 0) {
+        console.warn(`Warning: ${violations.rows.length} foreign key violation(s) after ${file}`);
+      }
+    }
     console.log(`Applied migration: ${file}`);
   }
 
   console.log('Migrations complete.');
 }
 
-applyMigrations().catch((err) => {
-  console.error('Migration failed:', err);
-  process.exit(1);
-});
+// Allow `tsx src/db/migrate.ts` (and the db:migrate script) to still run standalone.
+if (require.main === module) {
+  runMigrations().catch((err) => {
+    console.error('Migration failed:', err);
+    process.exit(1);
+  });
+}

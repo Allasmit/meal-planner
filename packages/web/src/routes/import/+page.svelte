@@ -12,6 +12,7 @@
   // Bulk URL import
   let bulkUrls = $state('');
   let bulkLoading = $state(false);
+  let bulkProgress = $state('');
   let bulkResult = $state<{
     created: number;
     errors: number;
@@ -89,22 +90,23 @@
 
     bulkLoading = true;
     try {
-      const settled = await Promise.allSettled(
-        urls.map(async (currentUrl) => api.importUrl({ url: currentUrl }))
-      );
-
-      const results = settled.map((entry, index) => {
-        const currentUrl = urls[index];
-        if (entry.status === 'fulfilled') {
-          return { row: index + 1, url: currentUrl, status: 'created' as const };
+      // Sequential on purpose: each import fetches and parses a page server-side, and running
+      // them in parallel overloads the server and risks timeouts on a modest home machine.
+      const results: { row: number; url: string; status: 'created' | 'error'; error?: string }[] = [];
+      for (const [index, currentUrl] of urls.entries()) {
+        bulkProgress = `Importing ${index + 1} of ${urls.length}…`;
+        try {
+          await api.importUrl({ url: currentUrl });
+          results.push({ row: index + 1, url: currentUrl, status: 'created' });
+        } catch (e: any) {
+          results.push({
+            row: index + 1,
+            url: currentUrl,
+            status: 'error',
+            error: e?.message ?? 'Failed to import recipe',
+          });
         }
-        return {
-          row: index + 1,
-          url: currentUrl,
-          status: 'error' as const,
-          error: entry.reason?.message ?? 'Failed to import recipe',
-        };
-      });
+      }
 
       bulkResult = {
         created: results.filter((r) => r.status === 'created').length,
@@ -115,6 +117,7 @@
       bulkError = e.message;
     } finally {
       bulkLoading = false;
+      bulkProgress = '';
     }
   }
 
@@ -432,7 +435,7 @@
       disabled={bulkLoading || !bulkUrls.trim()}
       class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
     >
-      {bulkLoading ? 'Importing…' : 'Import URLs'}
+      {bulkLoading ? bulkProgress || 'Importing…' : 'Import URLs'}
     </button>
     {#if bulkError}
       <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{bulkError}</div>
@@ -492,8 +495,13 @@
       <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{csvError}</div>
     {/if}
     {#if csvResult}
-      <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
-        ✅ {csvResult.created} created, {csvResult.errors} errors
+      <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800 space-y-1">
+        <div>✅ {csvResult.created} created, {csvResult.errors} errors</div>
+        {#each csvResult.results.filter((r) => r.status === 'error' || r.warnings?.length) as r}
+          <div class={r.status === 'error' ? 'text-red-700' : 'text-amber-700'}>
+            Row {r.row} ({r.name}): {r.status === 'error' ? r.error : r.warnings.join('; ')}
+          </div>
+        {/each}
       </div>
     {/if}
   </div>

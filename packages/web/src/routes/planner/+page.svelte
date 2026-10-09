@@ -24,23 +24,25 @@
   let weekDays = $derived(getWeekDays(weekStart));
   let weekLabel = $derived(formatWeekRange(weekStart));
 
-  let activeFilterCount = $derived(
-    (filterDietaryIds.length > 0 ? 1 : 0) +
-    (filterCuisineId ? 1 : 0) +
-    (filterDifficulty ? 1 : 0) +
-    (filterPrepTimeMax ? 1 : 0) +
-    (filterIsTested !== null ? 1 : 0)
-  );
-
   onMount(() => loadWeek());
 
+  let loadSeq = 0;
+  let loadError = $state('');
+
   async function loadWeek() {
+    // Ignore a slow response for a week the user has already navigated away from.
+    const seq = ++loadSeq;
+    const requestedWeek = toDateString(weekStart);
     loading = true;
+    loadError = '';
     try {
-      const plans = await api.getWeekPlan(toDateString(weekStart)) as MealPlan[];
+      const plans = await api.getWeekPlan(requestedWeek) as MealPlan[];
+      if (seq !== loadSeq) return;
       planMap = new Map(plans.map((p) => [`${p.planDate}::${p.mealSlot}`, p]));
+    } catch (e: any) {
+      if (seq === loadSeq) loadError = e?.message ?? 'Could not load the plan';
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 
@@ -67,42 +69,20 @@
     window.print();
   }
 
-  async function loadPickerMeals() {
-    pickerLoading = true;
-    try {
-      const params: Record<string, string> = {};
-      if (mealSearch) params.search = mealSearch;
-      if (filterDietaryIds.length) params.dietaryTypeIds = filterDietaryIds.join(',');
-      if (filterCuisineId) params.cuisineId = String(filterCuisineId);
-      if (filterDifficulty) params.difficulty = filterDifficulty;
-      if (filterPrepTimeMax) params.prepTimeMax = String(filterPrepTimeMax);
-      if (filterIsTested !== null) params.isTested = String(filterIsTested);
-      allMeals = await api.getMeals(params) as Meal[];
-    } finally {
-      pickerLoading = false;
-    }
-  }
-
   async function openPicker(date: string, slot: string) {
     pickerDate = date;
     pickerSlot = slot;
     pickerOpen = true;
   }
 
-  function toggleDietary(id: number) {
-    filterDietaryIds = filterDietaryIds.includes(id)
-      ? filterDietaryIds.filter((d) => d !== id)
-      : [...filterDietaryIds, id];
-  }
-
-  let searchTimeout: ReturnType<typeof setTimeout>;
-  function onSearchInput() {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(loadPickerMeals, 300);
-  }
-
   async function assignMeal(meal: Meal) {
-    await api.setPlanSlot(pickerDate, pickerSlot, { mealId: meal.id, servings: meal.servings });
+    try {
+      await api.setPlanSlot(pickerDate, pickerSlot, { mealId: meal.id, servings: meal.servings });
+    } catch (e: any) {
+      pickerOpen = false;
+      loadError = e?.message ?? 'Could not save that meal';
+      return;
+    }
     pickerOpen = false;
     await loadWeek();
   }
@@ -179,6 +159,11 @@
   {#if loading}
     <div class="flex justify-center py-10">
       <div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div>
+    </div>
+  {:else if loadError}
+    <div class="text-center py-10 space-y-3">
+      <p class="text-sm" style="color: var(--color-danger)">{loadError}</p>
+      <button onclick={loadWeek} class="text-sm font-semibold px-4 py-2 rounded-xl text-white" style="background: var(--color-accent)">Try again</button>
     </div>
   {:else}
     <div class="hidden md:block print:block print:overflow-visible overflow-x-auto">
@@ -307,7 +292,7 @@
 
         <label class="flex items-center gap-3 cursor-pointer">
           <input type="checkbox" bind:checked={autoOverwrite} class="w-4 h-4 accent-green-600" />
-          <span class="text-sm" style="color: var(--color-text)">Only overwrite already filled slots</span>
+          <span class="text-sm" style="color: var(--color-text)">Replace meals in slots that are already filled</span>
         </label>
       </div>
 

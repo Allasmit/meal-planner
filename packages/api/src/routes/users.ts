@@ -1,15 +1,23 @@
-import { Router, type Response } from 'express';
+import type { Response } from 'express';
+import { createRouter } from '../lib/router';
+import { parseId } from '../lib/params';
 import bcrypt from 'bcryptjs';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { users } from '../db/schema';
 import { requireAdmin, type AuthRequest } from '../middleware/auth';
 import { z } from 'zod';
 
-export const usersRouter = Router();
+export const usersRouter = createRouter();
 
 // All routes require admin
 usersRouter.use(requireAdmin);
+
+/** True when `id` is an admin and no other admin exists, i.e. removing/demoting them would lock everyone out of admin tools. */
+async function isLastAdmin(id: number): Promise<boolean> {
+  const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'));
+  return admins.length === 1 && admins[0].id === id;
+}
 
 // GET /api/users
 usersRouter.get('/', async (_req: AuthRequest, res: Response): Promise<void> => {
@@ -63,7 +71,8 @@ usersRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> => 
 
 // PUT /api/users/:id
 usersRouter.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
   const schema = z.object({
     displayName: z.string().min(1).max(64).optional(),
     role: z.enum(['admin', 'member']).optional(),
@@ -75,9 +84,27 @@ usersRouter.put('/:id', async (req: AuthRequest, res: Response): Promise<void> =
     return;
   }
 
+  if (Object.keys(parsed.data).length === 0) {
+    res.status(400).json({ error: 'Nothing to update' });
+    return;
+  }
+
+  const [existing] = await db.select({ role: users.role }).from(users).where(eq(users.id, id)).limit(1);
+  if (!existing) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  const roleChanging = parsed.data.role !== undefined && parsed.data.role !== existing.role;
+  if (roleChanging && parsed.data.role === 'member' && (await isLastAdmin(id))) {
+    res.status(400).json({ error: 'There must be at least one admin' });
+    return;
+  }
+
   const [updated] = await db
     .update(users)
-    .set(parsed.data)
+    // A role change invalidates that user's existing sessions so they sign in again with the new role.
+    .set(roleChanging ? { ...parsed.data, tokenVersion: sql`${users.tokenVersion} + 1` } : parsed.data)
     .where(eq(users.id, id))
     .returning({ id: users.id, username: users.username, displayName: users.displayName, role: users.role });
 
@@ -90,7 +117,8 @@ usersRouter.put('/:id', async (req: AuthRequest, res: Response): Promise<void> =
 
 // POST /api/users/:id/reset-password
 usersRouter.post('/:id/reset-password', async (req: AuthRequest, res: Response): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
   const schema = z.object({ password: z.string().min(8) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
@@ -101,7 +129,7 @@ usersRouter.post('/:id/reset-password', async (req: AuthRequest, res: Response):
   const passwordHash = await bcrypt.hash(parsed.data.password, 12);
   const [updated] = await db
     .update(users)
-    .set({ passwordHash })
+    .set({ passwordHash, tokenVersion: sql`${users.tokenVersion} + 1` })
     .where(eq(users.id, id))
     .returning({ id: users.id });
 
@@ -114,7 +142,8 @@ usersRouter.post('/:id/reset-password', async (req: AuthRequest, res: Response):
 
 // DELETE /api/users/:id
 usersRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
   if (req.user!.userId === id) {
     res.status(400).json({ error: 'Cannot delete your own account' });
     return;

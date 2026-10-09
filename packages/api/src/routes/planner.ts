@@ -1,11 +1,15 @@
-﻿import { Router, type Response } from 'express';
+﻿import type { Response } from 'express';
+import { createRouter } from '../lib/router';
+import { parseId } from '../lib/params';
+import { aggregateShoppingList } from '../lib/shopping';
+import { sqliteNow } from '../lib/sqlite';
 import { eq, and, between, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client';
 import { mealPlans, meals, mealIngredients, ingredients, ingredientCategories, users, weeklyRules, userSettings, familyMembers, familyMemberDietaryTypes } from '../db/schema';
 import { requireAuth, type AuthRequest } from '../middleware/auth';
 import { z } from 'zod';
 
-export const plannerRouter = Router();
+export const plannerRouter = createRouter();
 
 plannerRouter.use(requireAuth);
 
@@ -35,7 +39,10 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
     return;
   }
 
-  const mealIds = validPlans.map((p) => p.mealId!);
+  // A meal planned several times in the week needs its ingredients several times.
+  const mealCounts = new Map<number, number>();
+  for (const plan of validPlans) mealCounts.set(plan.mealId!, (mealCounts.get(plan.mealId!) ?? 0) + 1);
+  const mealIds = [...mealCounts.keys()];
 
   const rows = await db
     .select({
@@ -53,84 +60,7 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
     .leftJoin(ingredientCategories, eq(ingredients.categoryId, ingredientCategories.id))
     .where(inArray(mealIngredients.mealId, mealIds));
 
-  const hiddenCategoryNames = new Set([
-    'Spices & Herbs',
-    'Condiments & Sauces',
-    'Pantry & Dry Goods',
-    'Canned & Jarred',
-    'Beverages',
-    'Frozen',
-    'Other',
-  ]);
-
-  const filteredRows = showHidden
-    ? rows
-    : rows.filter((row) => {
-        if (!row.categoryName) return true;
-        return !hiddenCategoryNames.has(row.categoryName);
-      });
-
-  type AggKey = string;
-  const agg = new Map<
-    AggKey,
-    {
-      ingredientId: number;
-      ingredientName: string;
-      quantity: number;
-      unit: string;
-      categoryId: number | null;
-      categoryName: string | null;
-      categorySortOrder: number;
-    }
-  >();
-
-  for (const row of filteredRows) {
-    const key: AggKey = `${row.ingredientId}::${row.unit}`;
-    if (agg.has(key)) {
-      agg.get(key)!.quantity += row.quantity;
-    } else {
-      agg.set(key, {
-        ingredientId: row.ingredientId,
-        ingredientName: row.ingredientName,
-        quantity: row.quantity,
-        unit: row.unit,
-        categoryId: row.categoryId ?? null,
-        categoryName: row.categoryName ?? 'Other',
-        categorySortOrder: row.categorySortOrder ?? 99,
-      });
-    }
-  }
-
-  type CategoryGroup = {
-    categoryId: number | null;
-    categoryName: string;
-    sortOrder: number;
-    items: { ingredientId: number; name: string; quantity: number; unit: string }[];
-  };
-
-  const categoryMap = new Map<string, CategoryGroup>();
-
-  for (const item of agg.values()) {
-    const catKey = String(item.categoryId ?? 'null');
-    if (!categoryMap.has(catKey)) {
-      categoryMap.set(catKey, {
-        categoryId: item.categoryId,
-        categoryName: item.categoryName ?? 'Other',
-        sortOrder: item.categorySortOrder,
-        items: [],
-      });
-    }
-    categoryMap.get(catKey)!.items.push({
-      ingredientId: item.ingredientId,
-      name: item.ingredientName,
-      quantity: Math.round(item.quantity * 100) / 100,
-      unit: item.unit,
-    });
-  }
-
-  const result = [...categoryMap.values()]
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((cat) => ({ ...cat, items: cat.items.sort((a, b) => a.name.localeCompare(b.name)) }));
+  const result = aggregateShoppingList(rows, mealCounts, showHidden);
 
   res.json(result);
 });
@@ -188,19 +118,22 @@ plannerRouter.put('/:date/:slot', async (req: AuthRequest, res: Response): Promi
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  const [existing] = await db
-    .select({ id: mealPlans.id })
-    .from(mealPlans)
-    .where(and(eq(mealPlans.planDate, date), eq(mealPlans.mealSlot, slot as any)))
-    .limit(1);
-
-  if (existing) {
-    const [updated] = await db.update(mealPlans).set({ mealId: parsed.data.mealId, servings: parsed.data.servings, notes: parsed.data.notes, assignedByUserId: req.user!.userId, updatedAt: new Date().toISOString() }).where(eq(mealPlans.id, existing.id)).returning();
-    res.json(updated);
-  } else {
-    const [created] = await db.insert(mealPlans).values({ planDate: date, mealSlot: slot as any, mealId: parsed.data.mealId, servings: parsed.data.servings, notes: parsed.data.notes, assignedByUserId: req.user!.userId }).returning();
-    res.status(201).json(created);
-  }
+  // Single atomic upsert on the unique (date, slot) index, so two quick requests can't collide.
+  const slotValues = {
+    mealId: parsed.data.mealId,
+    servings: parsed.data.servings,
+    notes: parsed.data.notes,
+    assignedByUserId: req.user!.userId,
+  };
+  const [saved] = await db
+    .insert(mealPlans)
+    .values({ planDate: date, mealSlot: slot as any, ...slotValues })
+    .onConflictDoUpdate({
+      target: [mealPlans.planDate, mealPlans.mealSlot],
+      set: { ...slotValues, updatedAt: sqliteNow() },
+    })
+    .returning();
+  res.json(saved);
 });
 
 // DELETE /api/planner/:date/:slot
@@ -225,7 +158,8 @@ plannerRouter.get('/rules', async (_req: AuthRequest, res: Response): Promise<vo
 // ─── PATCH /api/planner/rules/:id ─────────────────────────────────────────────
 
 plannerRouter.patch('/rules/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
   const schema = z.object({
     label: z.string().min(1).optional(),
     value: z.string().optional(),
@@ -378,7 +312,7 @@ plannerRouter.post('/auto-generate', async (req: AuthRequest, res: Response): Pr
           .set({
             mealId: s.mealId,
             assignedByUserId: req.user!.userId,
-            updatedAt: new Date().toISOString(),
+            updatedAt: sqliteNow(),
           })
           .where(eq(mealPlans.id, current.id));
       }

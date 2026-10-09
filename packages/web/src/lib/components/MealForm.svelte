@@ -266,6 +266,8 @@
     { value: 'pork', label: '🐷 Pork' },
     { value: 'fish', label: '🐟 Fish' },
     { value: 'lamb', label: '🐑 Lamb' },
+    { value: 'vegetarian', label: '🥦 Vegetarian' },
+    { value: 'vegan', label: '🌱 Vegan' },
     { value: 'other', label: '🍲 Other' },
   ];
   const CATEGORY_OPTIONS = [

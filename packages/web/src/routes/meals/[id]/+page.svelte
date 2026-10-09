@@ -9,7 +9,7 @@
   let loading = $state(true);
   let deleting = $state(false);
 
-  let id = $derived(parseInt($page.params.id, 10));
+  let id = $derived(parseInt($page.params.id ?? '', 10));
 
   const PROTEIN_LABELS: Record<string, string> = {
     chicken: '🍗 Chicken',
@@ -17,6 +17,8 @@
     pork: '🐷 Pork',
     fish: '🐟 Fish',
     lamb: '🐑 Lamb',
+    vegetarian: '🥦 Vegetarian',
+    vegan: '🌱 Vegan',
     other: '🍲 Other',
   };
 

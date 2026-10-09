@@ -1,4 +1,8 @@
-import { Router, type Response } from 'express';
+import type { RequestHandler, Response } from 'express';
+import { createRouter } from '../lib/router';
+import { PROTEIN_TYPES, LEFTOVER_BEHAVIOURS, type ProteinType, type MealCategory } from '../lib/enums';
+import { parseCsv, normaliseName } from '../lib/csv';
+import { safeFetchText, SafeFetchError } from '../lib/safe-fetch';
 import * as cheerio from 'cheerio';
 import { db } from '../db/client';
 import {
@@ -20,7 +24,14 @@ import pdfParse from 'pdf-parse';
 import { createWorker, PSM, OEM } from 'tesseract.js';
 import sharp from 'sharp';
 
-export const importRouter = Router();
+export const importRouter = createRouter();
+
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Cache-Control': 'no-cache',
+};
 importRouter.use(requireAuth);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -116,37 +127,6 @@ function toCsvRow(values: CsvCell[]): string {
   return values.map(escapeCsvCell).join(',');
 }
 
-function parseCsvLine(line: string): string[] {
-  const cells: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-
-    if (char === ',' && !inQuotes) {
-      cells.push(current.trim());
-      current = '';
-      continue;
-    }
-
-    current += char;
-  }
-
-  cells.push(current.trim());
-  return cells;
-}
-
 interface ParsedRecipe {
   name: string;
   description: string;
@@ -157,7 +137,7 @@ interface ParsedRecipe {
   ingredientStrings: string[];
   imageUrl: string | null;
   cuisine: string | null;
-  mealCategory: string | null;
+  mealCategory: MealCategory | null;
   dietaryTypeNames: string[];
   estimatedCost: number | null;
 }
@@ -607,7 +587,7 @@ function extractRecipeFromHtml(html: string): ParsedRecipe | null {
 type ImportOverrides = {
   sourceUrl?: string | null;
   cost?: number | null;
-  proteinType?: 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'other' | null;
+  proteinType?: ProteinType | null;
   mealCategory?: 'dinner' | 'breakfast' | 'lunch' | 'baking' | 'treat' | 'snack' | null;
   leftoverBehaviour?: 'consumed_same' | 'fridge_next_day' | 'freezable';
   isFavourite?: boolean;
@@ -636,7 +616,7 @@ const upload = multer({
       return;
     }
 
-    cb(new Error('Unsupported file type. Use PDF or image files.'));
+    cb(Object.assign(new Error('Unsupported file type. Use PDF or image files.'), { status: 400 }));
   },
 });
 
@@ -669,7 +649,7 @@ function parseImportOverrides(body: Record<string, unknown>): ImportOverrides {
   const mealCategoryRaw = parseOptionalStringInput(body.mealCategory);
   const leftover = parseOptionalStringInput(body.leftoverBehaviour);
 
-  const proteinTypeAllowed = new Set(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']);
+  const proteinTypeAllowed = new Set<string>(PROTEIN_TYPES);
   const leftoverAllowed = new Set(['consumed_same', 'fridge_next_day', 'freezable']);
 
   const parsedMealCategory = normalizeMealCategory(mealCategoryRaw ?? null);
@@ -678,7 +658,7 @@ function parseImportOverrides(body: Record<string, unknown>): ImportOverrides {
     sourceUrl: parseOptionalStringInput(body.sourceUrl) ?? undefined,
     cost: parseOptionalNumberInput(body.cost),
     proteinType: protein && proteinTypeAllowed.has(protein)
-      ? (protein as 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'other')
+      ? (protein as ProteinType)
       : undefined,
     mealCategory: parsedMealCategory ?? undefined,
     leftoverBehaviour: leftover && leftoverAllowed.has(leftover)
@@ -696,7 +676,7 @@ importRouter.post('/url', async (req: AuthRequest, res: Response): Promise<void>
     url: z.string().url(),
     sourceUrl: z.string().url().optional(),
     cost: z.number().min(0).optional().nullable(),
-    proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']).optional().nullable(),
+    proteinType: z.enum(PROTEIN_TYPES).optional().nullable(),
     mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
     leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).optional(),
     isFavourite: z.boolean().optional(),
@@ -709,32 +689,36 @@ importRouter.post('/url', async (req: AuthRequest, res: Response): Promise<void>
     return;
   }
 
+  // A client timeout or retry must not create the same recipe twice.
+  const [alreadyImported] = await db
+    .select({ id: meals.id, name: meals.name })
+    .from(meals)
+    .where(eq(meals.sourceUrl, parsed.data.sourceUrl ?? parsed.data.url))
+    .limit(1);
+  if (alreadyImported) {
+    res.status(409).json({
+      error: `Already imported as "${alreadyImported.name}" (meal #${alreadyImported.id}).`,
+    });
+    return;
+  }
+
   let html: string;
   try {
-    const response = await fetch(parsed.data.url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Cache-Control': 'no-cache',
-        'Upgrade-Insecure-Requests': '1',
-      },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!response.ok) {
-      if ([402, 403, 429].includes(response.status)) {
+    const page = await safeFetchText(parsed.data.url, { headers: BROWSER_HEADERS });
+    if (page.status < 200 || page.status >= 300) {
+      if ([402, 403, 429].includes(page.status)) {
         res.status(422).json({
-          error: `This site blocked the import (HTTP ${response.status}). Open the recipe page in your browser, copy the page HTML (Ctrl+U or right-click → View Page Source), then use the "Paste Page HTML" import method instead.`,
+          error: `This site blocked the import (HTTP ${page.status}). Open the recipe page in your browser, copy the page HTML (Ctrl+U or right-click → View Page Source), then use the "Paste Page HTML" import method instead.`,
         });
       } else {
-        throw new Error(`HTTP ${response.status}`);
+        res.status(422).json({ error: `The site responded with an error (HTTP ${page.status}).` });
       }
       return;
     }
-    html = await response.text();
+    html = page.body;
   } catch (e: any) {
-    res.status(422).json({ error: `Could not fetch URL: ${e.message}` });
+    const message = e instanceof SafeFetchError ? e.message : 'Could not fetch that URL.';
+    res.status(422).json({ error: `Could not fetch URL: ${message}` });
     return;
   }
 
@@ -836,7 +820,7 @@ importRouter.post('/social', async (req: AuthRequest, res: Response): Promise<vo
       comments: z.string().optional(),
       sourceUrl: z.string().url().optional(),
       cost: z.number().min(0).optional().nullable(),
-      proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']).optional().nullable(),
+      proteinType: z.enum(PROTEIN_TYPES).optional().nullable(),
       mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
       leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).optional(),
       isFavourite: z.boolean().optional(),
@@ -860,18 +844,10 @@ importRouter.post('/social', async (req: AuthRequest, res: Response): Promise<vo
 
   if (parsed.data.url) {
     try {
-      const response = await fetch(parsed.data.url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cache-Control': 'no-cache',
-        },
-        signal: AbortSignal.timeout(10000),
-      });
+      const page = await safeFetchText(parsed.data.url, { headers: BROWSER_HEADERS });
 
-      if (response.ok) {
-        const html = await response.text();
+      if (page.status >= 200 && page.status < 300) {
+        const html = page.body;
         recipe = extractRecipeFromHtml(html);
 
         if (!recipe) {
@@ -977,7 +953,7 @@ importRouter.get('/csv-template', (_req: AuthRequest, res: Response): void => {
     true,
     false,
     'Great for batch cooking',
-    'Gluten Free|Dairy Free',
+    'Gluten-Free|Dairy-Free',
     'Mom|Dad',
     'Brown the mince|Add tomatoes and simmer|Cook pasta al dente|Combine and serve',
     'Minced beef:500:g|Spaghetti:400:g|Tinned tomatoes:400:g|Onion:1:whole|Garlic:3:cloves',
@@ -991,194 +967,170 @@ importRouter.get('/csv-template', (_req: AuthRequest, res: Response): void => {
 
 // ─── POST /api/import/csv ──────────────────────────────────────────────────────
 
+const MAX_CSV_ROWS = 500;
+
 importRouter.post('/csv', async (req: AuthRequest, res: Response): Promise<void> => {
-  const { csvText } = req.body;
+  const csvText = req.body?.csvText;
   if (!csvText || typeof csvText !== 'string') {
     res.status(400).json({ error: 'csvText field required' });
     return;
   }
 
-  const lines = csvText
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((line: string) => line.trim())
-    .filter(Boolean);
-
-  if (lines.length < 2) {
+  const records = parseCsv(csvText);
+  if (records.length < 2) {
     res.status(400).json({ error: 'CSV has no data rows' });
     return;
   }
+  const dataRows = records.slice(1); // first record is the header
+  if (dataRows.length > MAX_CSV_ROWS) {
+    res.status(400).json({ error: `CSV has too many rows (maximum ${MAX_CSV_ROWS} per import)` });
+    return;
+  }
 
-  const parseBool = (value: string | undefined): boolean => {
-    const normalized = (value ?? '').trim().toLowerCase();
-    return normalized === 'true' || normalized === '1' || normalized === 'yes';
-  };
-
+  const parseBool = (value: string | undefined): boolean => ['true', '1', 'yes'].includes((value ?? '').trim().toLowerCase());
   const parseOptionalNumber = (value: string | undefined): number | null => {
     const trimmed = (value ?? '').trim();
     if (!trimmed) return null;
     const parsed = Number(trimmed);
     return Number.isFinite(parsed) ? parsed : null;
   };
-
-  const splitPipe = (value: string | undefined): string[] => {
-    return (value ?? '')
-      .split('|')
-      .map((part) => part.trim())
-      .filter(Boolean);
-  };
-
+  const splitPipe = (value: string | undefined): string[] =>
+    (value ?? '').split('|').map((part) => part.trim()).filter(Boolean);
   const normalizeOrNull = (value: string | undefined): string | null => {
     const trimmed = (value ?? '').trim();
     return trimmed ? trimmed : null;
   };
 
-  const dataLines = lines.slice(1);
-  const results: { row: number; name: string; status: 'created' | 'error'; error?: string }[] = [];
+  // Look reference data up once instead of once per row.
+  const [cuisineRows, dietaryRows, memberRows, categoryRows, ingredientRows] = await Promise.all([
+    db.select({ id: cuisines.id, name: cuisines.name }).from(cuisines),
+    db.select({ id: dietaryTypes.id, name: dietaryTypes.name }).from(dietaryTypes),
+    db.select({ id: familyMembers.id, name: familyMembers.name }).from(familyMembers),
+    db.select({ id: ingredientCategories.id, name: ingredientCategories.name }).from(ingredientCategories),
+    db.select({ id: ingredients.id, name: ingredients.name }).from(ingredients),
+  ]);
+  const cuisineByName = new Map(cuisineRows.map((c) => [normaliseName(c.name), c.id]));
+  const dietaryByName = new Map(dietaryRows.map((d) => [normaliseName(d.name), d.id]));
+  const memberByName = new Map(memberRows.map((m) => [normaliseName(m.name), m.id]));
+  const categoryByName = new Map(categoryRows.map((c) => [c.name, c.id]));
+  const ingredientByName = new Map(ingredientRows.map((i) => [i.name.trim().toLowerCase(), i.id]));
 
-  for (let i = 0; i < dataLines.length; i++) {
-    const line = dataLines[i];
-    const cols = parseCsvLine(line);
+  const allowedProteinTypes = new Set<string>(PROTEIN_TYPES);
+  const allowedLeftoverBehaviours = new Set<string>(LEFTOVER_BEHAVIOURS);
 
+  const results: { row: number; name: string; status: 'created' | 'error'; error?: string; warnings?: string[] }[] = [];
+
+  for (let i = 0; i < dataRows.length; i++) {
     const [
-      name,
-      description,
-      prepStr,
-      cookStr,
-      servingsStr,
-      difficulty,
-      cuisineName,
-      costStr,
-      proteinType,
-      mealCategory,
-      leftoverBehaviour,
-      sourceUrl,
-      imageUrl,
-      isTestedStr,
-      isFavouriteStr,
-      isSpecialOccasionStr,
-      notes,
-      dietaryTypesRaw,
-      suitableForRaw,
-      instructionsRaw,
-      ingredientsRaw,
-    ] = cols;
+      name, description, prepStr, cookStr, servingsStr, difficulty, cuisineName, costStr, proteinType,
+      mealCategory, leftoverBehaviour, sourceUrl, imageUrl, isTestedStr, isFavouriteStr, isSpecialOccasionStr,
+      notes, dietaryTypesRaw, suitableForRaw, instructionsRaw, ingredientsRaw,
+    ] = dataRows[i];
 
     if (!name?.trim()) continue;
+
+    const warnings: string[] = [];
+    const newIngredientIds = new Map<string, number>();
 
     try {
       let cuisineId: number | null = null;
       if (cuisineName?.trim()) {
-        const [c] = await db
-          .select({ id: cuisines.id })
-          .from(cuisines)
-          .where(eq(cuisines.name, cuisineName.trim()))
-          .limit(1);
-        if (c) cuisineId = c.id;
+        cuisineId = cuisineByName.get(normaliseName(cuisineName)) ?? null;
+        if (cuisineId === null) warnings.push(`Unknown cuisine "${cuisineName.trim()}"`);
       }
 
-      const instructions = splitPipe(instructionsRaw);
-      const ingredientParts = splitPipe(ingredientsRaw);
-      const dietaryTypeNames = splitPipe(dietaryTypesRaw);
-      const suitableForNames = splitPipe(suitableForRaw);
+      const difficultyValue = (difficulty ?? '').trim().toLowerCase();
+      if (difficultyValue && !['easy', 'medium', 'hard'].includes(difficultyValue)) warnings.push(`Unknown difficulty "${difficulty.trim()}", used "easy"`);
 
-      const allowedProteinTypes = new Set(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']);
-      const allowedMealCategories = new Set(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']);
-      const allowedLeftoverBehaviours = new Set(['consumed_same', 'fridge_next_day', 'freezable']);
+      const proteinTypeValue = normalizeOrNull(proteinType)?.toLowerCase() ?? null;
+      if (proteinTypeValue && !allowedProteinTypes.has(proteinTypeValue)) warnings.push(`Unknown protein type "${proteinType.trim()}"`);
 
-      const proteinTypeValue = normalizeOrNull(proteinType);
       const mealCategoryValue = normalizeMealCategory(normalizeOrNull(mealCategory));
-      const leftoverBehaviourValue = normalizeOrNull(leftoverBehaviour);
+      if (normalizeOrNull(mealCategory) && !mealCategoryValue) warnings.push(`Unknown meal category "${mealCategory.trim()}"`);
 
-      const [meal] = await db.insert(meals).values({
-        name: name.trim(),
-        description: normalizeOrNull(description),
-        prepTimeMinutes: parseInt(prepStr ?? '0', 10) || 0,
-        cookTimeMinutes: parseInt(cookStr ?? '0', 10) || 0,
-        servings: parseInt(servingsStr ?? '2', 10) || 2,
-        difficulty: (['easy', 'medium', 'hard'].includes(difficulty?.trim() ?? '') ? difficulty.trim() : 'easy') as 'easy' | 'medium' | 'hard',
-        cuisineId,
-        instructions: JSON.stringify(instructions),
-        cost: parseOptionalNumber(costStr),
-        proteinType: proteinTypeValue && allowedProteinTypes.has(proteinTypeValue)
-          ? proteinTypeValue as 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'other'
-          : null,
-        mealCategory: mealCategoryValue && allowedMealCategories.has(mealCategoryValue) ? mealCategoryValue : null,
-        leftoverBehaviour: leftoverBehaviourValue && allowedLeftoverBehaviours.has(leftoverBehaviourValue)
-          ? leftoverBehaviourValue as 'consumed_same' | 'fridge_next_day' | 'freezable'
-          : 'consumed_same',
-        sourceUrl: normalizeOrNull(sourceUrl),
-        imageUrl: normalizeOrNull(imageUrl),
-        isTested: parseBool(isTestedStr),
-        isFavourite: parseBool(isFavouriteStr),
-        isSpecialOccasion: parseBool(isSpecialOccasionStr),
-        notes: normalizeOrNull(notes),
-        createdByUserId: req.user!.userId,
-        updatedByUserId: req.user!.userId,
-      }).returning();
+      const leftoverValue = normalizeOrNull(leftoverBehaviour)?.toLowerCase() ?? null;
+      if (leftoverValue && !allowedLeftoverBehaviours.has(leftoverValue)) warnings.push(`Unknown leftover behaviour "${leftoverBehaviour.trim()}"`);
 
-      for (const part of ingredientParts) {
-        const [ingName, qtyStr, unit, ...noteParts] = part.split(':');
-        if (!ingName?.trim()) continue;
-
-        let [existing] = await db
-          .select({ id: ingredients.id })
-          .from(ingredients)
-          .where(eq(ingredients.name, ingName.trim()))
-          .limit(1);
-
-        if (!existing) {
-          [existing] = await db
-            .insert(ingredients)
-            .values({
-              name: ingName.trim(),
-              defaultUnit: unit?.trim() ?? 'unit',
-            })
-            .returning({ id: ingredients.id });
-        }
-
-        await db.insert(mealIngredients).values({
-          mealId: meal.id,
-          ingredientId: existing.id,
-          quantity: parseFloat(qtyStr ?? '1') || 1,
-          unit: unit?.trim() ?? 'unit',
-          notes: noteParts.length > 0 ? noteParts.join(':').trim() : undefined,
-        });
+      const dietaryIds: number[] = [];
+      for (const dietaryName of splitPipe(dietaryTypesRaw)) {
+        const id = dietaryByName.get(normaliseName(dietaryName));
+        if (id === undefined) warnings.push(`Unknown dietary type "${dietaryName}"`);
+        else dietaryIds.push(id);
       }
 
-      for (const dietaryTypeName of dietaryTypeNames) {
-        const [dietaryType] = await db
-          .select({ id: dietaryTypes.id })
-          .from(dietaryTypes)
-          .where(eq(dietaryTypes.name, dietaryTypeName))
-          .limit(1);
+      const memberIds: number[] = [];
+      for (const memberName of splitPipe(suitableForRaw)) {
+        const id = memberByName.get(normaliseName(memberName));
+        if (id === undefined) warnings.push(`Unknown family member "${memberName}"`);
+        else memberIds.push(id);
+      }
 
-        if (dietaryType) {
-          await db.insert(mealDietaryTypes).values({
+      await db.transaction(async (tx) => {
+        const [meal] = await tx.insert(meals).values({
+          name: name.trim(),
+          description: normalizeOrNull(description),
+          prepTimeMinutes: parseInt(prepStr ?? '0', 10) || 0,
+          cookTimeMinutes: parseInt(cookStr ?? '0', 10) || 0,
+          servings: parseInt(servingsStr ?? '2', 10) || 2,
+          difficulty: (['easy', 'medium', 'hard'].includes(difficultyValue) ? difficultyValue : 'easy') as 'easy' | 'medium' | 'hard',
+          cuisineId,
+          instructions: JSON.stringify(splitPipe(instructionsRaw)),
+          cost: parseOptionalNumber(costStr),
+          proteinType: proteinTypeValue && allowedProteinTypes.has(proteinTypeValue) ? (proteinTypeValue as ProteinType) : null,
+          mealCategory: mealCategoryValue,
+          leftoverBehaviour: leftoverValue && allowedLeftoverBehaviours.has(leftoverValue)
+            ? (leftoverValue as 'consumed_same' | 'fridge_next_day' | 'freezable')
+            : 'consumed_same',
+          sourceUrl: normalizeOrNull(sourceUrl),
+          imageUrl: normalizeOrNull(imageUrl),
+          isTested: parseBool(isTestedStr),
+          isFavourite: parseBool(isFavouriteStr),
+          isSpecialOccasion: parseBool(isSpecialOccasionStr),
+          notes: normalizeOrNull(notes),
+          createdByUserId: req.user!.userId,
+          updatedByUserId: req.user!.userId,
+        }).returning({ id: meals.id });
+
+        for (const part of splitPipe(ingredientsRaw)) {
+          const [ingName, qtyStr, unit, ...noteParts] = part.split(':');
+          const trimmedName = ingName?.trim();
+          if (!trimmedName) continue;
+
+          const key = trimmedName.toLowerCase();
+          let ingredientId = ingredientByName.get(key) ?? newIngredientIds.get(key);
+          if (ingredientId === undefined) {
+            const categoryName = guessCategoryFromName(trimmedName);
+            const [created] = await tx
+              .insert(ingredients)
+              .values({ name: trimmedName, defaultUnit: unit?.trim() || 'unit', categoryId: categoryByName.get(categoryName) ?? null })
+              .returning({ id: ingredients.id });
+            ingredientId = created.id;
+            newIngredientIds.set(key, ingredientId);
+          }
+
+          const quantity = parseFloat(qtyStr ?? '');
+          await tx.insert(mealIngredients).values({
             mealId: meal.id,
-            dietaryTypeId: dietaryType.id,
+            ingredientId,
+            quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+            unit: unit?.trim() || 'unit',
+            notes: noteParts.length > 0 ? noteParts.join(':').trim() : undefined,
           });
         }
-      }
 
-      for (const memberName of suitableForNames) {
-        const [member] = await db
-          .select({ id: familyMembers.id })
-          .from(familyMembers)
-          .where(eq(familyMembers.name, memberName))
-          .limit(1);
-
-        if (member) {
-          await db.insert(mealSuitableFor).values({
-            mealId: meal.id,
-            familyMemberId: member.id,
-          });
+        if (dietaryIds.length > 0) {
+          await tx.insert(mealDietaryTypes).values([...new Set(dietaryIds)].map((dietaryTypeId) => ({ mealId: meal.id, dietaryTypeId })));
         }
-      }
+        if (memberIds.length > 0) {
+          await tx.insert(mealSuitableFor).values([...new Set(memberIds)].map((familyMemberId) => ({ mealId: meal.id, familyMemberId })));
+        }
+      });
 
-      results.push({ row: i + 2, name: name.trim(), status: 'created' });
+      // Only remember new ingredients once the row has been committed.
+      for (const [key, id] of newIngredientIds) ingredientByName.set(key, id);
+      results.push({ row: i + 2, name: name.trim(), status: 'created', ...(warnings.length ? { warnings } : {}) });
     } catch (e: any) {
-      results.push({ row: i + 2, name: name?.trim() ?? '?', status: 'error', error: e.message });
+      results.push({ row: i + 2, name: name?.trim() ?? '?', status: 'error', error: e?.cause?.message ?? e?.message ?? 'Failed to import row' });
     }
   }
 
@@ -1194,7 +1146,7 @@ importRouter.post('/parse-html', async (req: AuthRequest, res: Response): Promis
     html: z.string().min(1),
     sourceUrl: z.string().url().optional(),
     cost: z.number().min(0).optional().nullable(),
-    proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']).optional().nullable(),
+    proteinType: z.enum(PROTEIN_TYPES).optional().nullable(),
     mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
     leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).optional(),
     isFavourite: z.boolean().optional(),
@@ -1241,7 +1193,7 @@ importRouter.post('/text', async (req: AuthRequest, res: Response): Promise<void
     text: z.string().min(1),
     sourceUrl: z.string().url().optional(),
     cost: z.number().min(0).optional().nullable(),
-    proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']).optional().nullable(),
+    proteinType: z.enum(PROTEIN_TYPES).optional().nullable(),
     mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
     leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).optional(),
     isFavourite: z.boolean().optional(),
@@ -1283,7 +1235,8 @@ importRouter.post('/text', async (req: AuthRequest, res: Response): Promise<void
 
 // ─── POST /api/import/media ───────────────────────────────────────────────────
 
-importRouter.post('/media', upload.single('file'), async (req: AuthRequest, res: Response): Promise<void> => {
+// @types/multer bundles Express 5 typings while the runtime (and our other types) is Express 4, so the handler needs a cast.
+importRouter.post('/media', upload.single('file') as unknown as RequestHandler, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const file = req.file;
     if (!file) {

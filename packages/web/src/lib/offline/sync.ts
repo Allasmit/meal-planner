@@ -135,6 +135,10 @@ export async function flushQueue(): Promise<void> {
           headers: item.body ? { 'Content-Type': 'application/json' } : undefined,
           body: item.body,
         });
+        if (res.status === 401) {
+          // Session expired: keep the change queued so it can be sent after signing back in.
+          break;
+        }
         if (res.ok || (res.status >= 400 && res.status < 500)) {
           if (!res.ok) {
             console.warn('Dropping offline mutation rejected by server', item, res.status);

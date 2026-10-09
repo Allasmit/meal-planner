@@ -15,13 +15,21 @@
 
   onMount(() => loadList());
 
+  let loadSeq = 0;
+  let loadError = $state('');
+
   async function loadList() {
+    const seq = ++loadSeq;
     loading = true;
+    loadError = '';
     checked = new Set();
     try {
-      list = await api.getShoppingList(toDateString(weekStart), showSpices) as ShoppingListCategory[];
+      const result = await api.getShoppingList(toDateString(weekStart), showSpices) as ShoppingListCategory[];
+      if (seq === loadSeq) list = result;
+    } catch (e: any) {
+      if (seq === loadSeq) loadError = e?.message ?? 'Could not load the shopping list';
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 
@@ -42,7 +50,7 @@
   function buildListText(): string {
     return list.map((cat) => {
       const items = cat.items
-        .filter((i) => !checked.has(`${cat.categoryId}::${i.ingredientId}`))
+        .filter((i) => !checked.has(`${cat.categoryId}::${i.ingredientId}::${i.unit}`))
         .map((i) => `  • ${i.quantity} ${i.unit} ${i.name}`)
         .join('\n');
       return items ? `${cat.categoryName}:\n${items}` : '';
@@ -83,6 +91,11 @@
 
   {#if loading}
     <div class="flex justify-center py-10"><div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div></div>
+  {:else if loadError}
+    <div class="text-center py-10 space-y-3">
+      <p class="text-sm" style="color: var(--color-danger)">{loadError}</p>
+      <button onclick={loadList} class="text-sm font-semibold px-4 py-2 rounded-xl text-white" style="background: var(--color-accent)">Try again</button>
+    </div>
   {:else if list.length === 0}
     <div class="text-center py-12" style="color: var(--color-text-muted)">
       <div class="text-5xl mb-3">🛒</div>
@@ -126,7 +139,7 @@
         <div class="px-4 py-2.5 border-b font-semibold text-sm" style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)">{cat.categoryName}</div>
         <ul>
           {#each cat.items as item}
-            {@const key = `${cat.categoryId}::${item.ingredientId}`}
+            {@const key = `${cat.categoryId}::${item.ingredientId}::${item.unit}`}
             <li class="px-4 py-3 flex items-center gap-3 border-b" style="border-color: var(--color-border)">
               <button onclick={() => toggleItem(key)}
                 class="w-5 h-5 rounded border-2 shrink-0 transition-colors flex items-center justify-center"

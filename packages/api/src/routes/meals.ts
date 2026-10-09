@@ -1,5 +1,9 @@
-﻿import { Router, type Request, type Response } from 'express';
-import { eq, and, lte, inArray, like } from 'drizzle-orm';
+﻿import type { Request, Response } from 'express';
+import { createRouter } from '../lib/router';
+import { parseId, parseIdList, parseOptionalNumber } from '../lib/params';
+import { sqliteNow, escapeLike } from '../lib/sqlite';
+import { PROTEIN_TYPES, MEAL_CATEGORIES, LEFTOVER_BEHAVIOURS } from '../lib/enums';
+import { eq, and, lte, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   meals,
@@ -15,7 +19,14 @@ import {
 import { requireAuth, type AuthRequest } from '../middleware/auth';
 import { z } from 'zod';
 
-export const mealsRouter = Router();
+export const mealsRouter = createRouter();
+
+type MealRow = typeof meals.$inferSelect;
+
+/** Case-insensitive "contains" match that treats % and _ in the search text literally. */
+function containsText(column: Parameters<typeof eq>[0], text: string) {
+  return sql`${column} LIKE ${'%' + escapeLike(text) + '%'} ESCAPE '\\'`;
+}
 
 mealsRouter.use(requireAuth);
 
@@ -36,9 +47,9 @@ mealsRouter.get('/ingredient-categories', async (_req: Request, res: Response): 
 // Ingredients CRUD
 
 mealsRouter.get('/ingredients', async (req: Request, res: Response): Promise<void> => {
-  const search = req.query.search as string | undefined;
+  const search = typeof req.query.search === 'string' ? req.query.search : undefined;
   const rows = search
-    ? await db.select().from(ingredients).where(like(ingredients.name, `%${search}%`))
+    ? await db.select().from(ingredients).where(containsText(ingredients.name, search))
     : await db.select().from(ingredients);
   res.json(rows);
 });
@@ -70,7 +81,8 @@ mealsRouter.post('/ingredients', async (req: AuthRequest, res: Response): Promis
 });
 
 mealsRouter.patch('/ingredients/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
   const schema = z.object({
     name: z.string().min(1).max(100).optional(),
     categoryId: z.number().int().nullable().optional(),
@@ -119,17 +131,33 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
   } = req.query;
 
   const conditions: any[] = [];
-  if (search) conditions.push(like(meals.name, `%${search}%`));
-  if (cuisineId) conditions.push(eq(meals.cuisineId, parseInt(cuisineId as string, 10)));
-  if (difficulty) conditions.push(eq(meals.difficulty, difficulty as string));
-  if (prepTimeMax) conditions.push(lte(meals.prepTimeMinutes, parseInt(prepTimeMax as string, 10)));
+  const cuisineIdNum = parseOptionalNumber(cuisineId);
+  const prepTimeMaxNum = parseOptionalNumber(prepTimeMax);
+  const maxCostNum = parseOptionalNumber(maxCost);
+  const dietaryIdList = dietaryTypeIds ? parseIdList(dietaryTypeIds) : undefined;
+  const ingredientIdList = ingredientIds ? parseIdList(ingredientIds) : undefined;
+  const suitableIdList = suitableForMemberIds ? parseIdList(suitableForMemberIds) : undefined;
+  const preferredIdList = preferredByMemberIds ? parseIdList(preferredByMemberIds) : undefined;
+
+  if (
+    cuisineIdNum === null || prepTimeMaxNum === null || maxCostNum === null ||
+    dietaryIdList === null || ingredientIdList === null || suitableIdList === null || preferredIdList === null
+  ) {
+    res.status(400).json({ error: 'Invalid filter value' });
+    return;
+  }
+
+  if (typeof search === 'string' && search) conditions.push(containsText(meals.name, search));
+  if (cuisineIdNum !== undefined) conditions.push(eq(meals.cuisineId, cuisineIdNum));
+  if (difficulty) conditions.push(eq(meals.difficulty, difficulty as MealRow['difficulty']));
+  if (prepTimeMaxNum !== undefined) conditions.push(lte(meals.prepTimeMinutes, prepTimeMaxNum));
   if (isTested !== undefined) conditions.push(eq(meals.isTested, isTested === 'true'));
-  if (proteinType) conditions.push(eq(meals.proteinType, proteinType as string));
-  if (mealCategory) conditions.push(eq(meals.mealCategory, mealCategory as string));
-  if (leftoverBehaviour) conditions.push(eq(meals.leftoverBehaviour, leftoverBehaviour as string));
+  if (proteinType) conditions.push(eq(meals.proteinType, proteinType as MealRow['proteinType'] & string));
+  if (mealCategory) conditions.push(eq(meals.mealCategory, mealCategory as MealRow['mealCategory'] & string));
+  if (leftoverBehaviour) conditions.push(eq(meals.leftoverBehaviour, leftoverBehaviour as MealRow['leftoverBehaviour']));
   if (isFavourite !== undefined) conditions.push(eq(meals.isFavourite, isFavourite === 'true'));
   if (isSpecialOccasion !== undefined) conditions.push(eq(meals.isSpecialOccasion, isSpecialOccasion === 'true'));
-  if (maxCost) conditions.push(lte(meals.cost, parseFloat(maxCost as string)));
+  if (maxCostNum !== undefined) conditions.push(lte(meals.cost, maxCostNum));
 
   const mealRows = conditions.length > 0
     ? await db.select().from(meals).where(and(...conditions))
@@ -166,8 +194,8 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
 
   let filteredIds = new Set(mealIds);
 
-  if (dietaryTypeIds) {
-    const ids = (dietaryTypeIds as string).split(',').map(Number);
+  if (dietaryIdList) {
+    const ids = dietaryIdList;
     filteredIds = new Set(
       [...filteredIds].filter((id) => {
         const mealDietIds = dietaryRows.filter((r) => r.mealId === id).map((r) => r.dietaryTypeId);
@@ -176,8 +204,8 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
     );
   }
 
-  if (ingredientIds) {
-    const ids = (ingredientIds as string).split(',').map(Number);
+  if (ingredientIdList) {
+    const ids = ingredientIdList;
     filteredIds = new Set(
       [...filteredIds].filter((id) => {
         const mealIngIds = ingredientRows.filter((r) => r.mealId === id).map((r) => r.ingredientId);
@@ -186,8 +214,8 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
     );
   }
 
-  if (suitableForMemberIds) {
-    const memberIds = (suitableForMemberIds as string).split(',').map(Number);
+  if (suitableIdList) {
+    const memberIds = suitableIdList;
     const suitableFilterRows = await db
       .select({ mealId: mealSuitableFor.mealId, familyMemberId: mealSuitableFor.familyMemberId })
       .from(mealSuitableFor)
@@ -202,8 +230,8 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
     );
   }
 
-  if (preferredByMemberIds) {
-    const memberIds = (preferredByMemberIds as string).split(',').map(Number);
+  if (preferredIdList) {
+    const memberIds = preferredIdList;
     const preferredFilterRows = await db
       .select({ mealId: mealPreferredBy.mealId, familyMemberId: mealPreferredBy.familyMemberId })
       .from(mealPreferredBy)
@@ -256,13 +284,10 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
   res.json(result);
 });
 
-mealsRouter.get('/:id', async (req: Request, res: Response): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+/** Loads one meal with its dietary types, ingredients and family links. Shared by GET/POST/PUT so they all return the same shape. */
+async function getMealById(id: number) {
   const [meal] = await db.select().from(meals).where(eq(meals.id, id)).limit(1);
-  if (!meal) {
-    res.status(404).json({ error: 'Meal not found' });
-    return;
-  }
+  if (!meal) return null;
 
   const [mealDietary, mealIngs, suitableRows, preferredRows] = await Promise.all([
     db.select({ id: dietaryTypes.id, name: dietaryTypes.name, icon: dietaryTypes.icon })
@@ -287,14 +312,25 @@ mealsRouter.get('/:id', async (req: Request, res: Response): Promise<void> => {
       .where(eq(mealPreferredBy.mealId, id)),
   ]);
 
-  res.json({
+  return {
     ...meal,
     instructions: JSON.parse(meal.instructions || '[]'),
     dietaryTypes: mealDietary,
     ingredients: mealIngs,
     suitableForMemberIds: suitableRows.map((r) => r.familyMemberId),
     preferredByMemberIds: preferredRows.map((r) => r.familyMemberId),
-  });
+  };
+}
+
+mealsRouter.get('/:id', async (req: Request, res: Response): Promise<void> => {
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
+  const meal = await getMealById(id);
+  if (!meal) {
+    res.status(404).json({ error: 'Meal not found' });
+    return;
+  }
+  res.json(meal);
 });
 
 const mealSchema = z.object({
@@ -310,9 +346,9 @@ const mealSchema = z.object({
   isTested: z.boolean().default(false),
   notes: z.string().optional().nullable(),
   cost: z.number().min(0).optional().nullable(),
-  proteinType: z.enum(['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'other']).optional().nullable(),
-  mealCategory: z.enum(['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack']).optional().nullable(),
-  leftoverBehaviour: z.enum(['consumed_same', 'fridge_next_day', 'freezable']).default('consumed_same'),
+  proteinType: z.enum(PROTEIN_TYPES).optional().nullable(),
+  mealCategory: z.enum(MEAL_CATEGORIES).optional().nullable(),
+  leftoverBehaviour: z.enum(LEFTOVER_BEHAVIOURS).default('consumed_same'),
   sourceUrl: z.string().url().optional().nullable().or(z.literal('')).transform((v) => v === '' ? null : v),
   isFavourite: z.boolean().default(false),
   isSpecialOccasion: z.boolean().default(false),
@@ -327,6 +363,41 @@ const mealSchema = z.object({
   })).default([]),
 });
 
+type MealInput = z.infer<typeof mealSchema>;
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Replaces all junction rows and ingredients of a meal. Duplicate ids are collapsed so they can't hit unique indexes. */
+async function replaceMealLinks(tx: Tx, mealId: number, input: MealInput): Promise<void> {
+  const unique = (ids: number[]) => [...new Set(ids)];
+
+  await tx.delete(mealDietaryTypes).where(eq(mealDietaryTypes.mealId, mealId));
+  await tx.delete(mealSuitableFor).where(eq(mealSuitableFor.mealId, mealId));
+  await tx.delete(mealPreferredBy).where(eq(mealPreferredBy.mealId, mealId));
+  await tx.delete(mealIngredients).where(eq(mealIngredients.mealId, mealId));
+
+  const dietary = unique(input.dietaryTypeIds);
+  if (dietary.length > 0) {
+    await tx.insert(mealDietaryTypes).values(dietary.map((dietaryTypeId) => ({ mealId, dietaryTypeId })));
+  }
+  const suitable = unique(input.suitableForMemberIds);
+  if (suitable.length > 0) {
+    await tx.insert(mealSuitableFor).values(suitable.map((familyMemberId) => ({ mealId, familyMemberId })));
+  }
+  const preferred = unique(input.preferredByMemberIds);
+  if (preferred.length > 0) {
+    await tx.insert(mealPreferredBy).values(preferred.map((familyMemberId) => ({ mealId, familyMemberId })));
+  }
+  if (input.ingredients.length > 0) {
+    await tx.insert(mealIngredients).values(input.ingredients.map((i) => ({ ...i, mealId })));
+  }
+}
+
+function splitMealInput(input: MealInput) {
+  const { dietaryTypeIds, suitableForMemberIds, preferredByMemberIds, ingredients: ingList, instructions, ...mealData } = input;
+  return { mealData: { ...mealData, instructions: JSON.stringify(instructions) } };
+}
+
 mealsRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = mealSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -334,95 +405,51 @@ mealsRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> => 
     return;
   }
 
-  const { dietaryTypeIds, suitableForMemberIds, preferredByMemberIds, ingredients: ingList, instructions, ...mealData } = parsed.data;
-  const [meal] = await db
-    .insert(meals)
-    .values({
-      ...mealData,
-      instructions: JSON.stringify(instructions),
-      createdByUserId: req.user!.userId,
-      updatedByUserId: req.user!.userId,
-    })
-    .returning();
-
-  if (dietaryTypeIds.length > 0) {
-    await db.insert(mealDietaryTypes).values(dietaryTypeIds.map((dtId) => ({ mealId: meal.id, dietaryTypeId: dtId })));
-  }
-  if (suitableForMemberIds.length > 0) {
-    await db.insert(mealSuitableFor).values(suitableForMemberIds.map((mid) => ({ mealId: meal.id, familyMemberId: mid })));
-  }
-  if (preferredByMemberIds.length > 0) {
-    await db.insert(mealPreferredBy).values(preferredByMemberIds.map((mid) => ({ mealId: meal.id, familyMemberId: mid })));
-  }
-  if (ingList.length > 0) {
-    await db.insert(mealIngredients).values(ingList.map((i) => ({ ...i, mealId: meal.id })));
-  }
-
-  res.status(201).json({
-    ...meal,
-    instructions,
-    dietaryTypes: [],
-    ingredients: [],
-    suitableForMemberIds,
-    preferredByMemberIds,
+  const { mealData } = splitMealInput(parsed.data);
+  // One transaction: a failure part-way (e.g. an unknown ingredient id) leaves nothing behind.
+  const mealId = await db.transaction(async (tx) => {
+    const [meal] = await tx
+      .insert(meals)
+      .values({ ...mealData, createdByUserId: req.user!.userId, updatedByUserId: req.user!.userId })
+      .returning({ id: meals.id });
+    await replaceMealLinks(tx, meal.id, parsed.data);
+    return meal.id;
   });
+
+  res.status(201).json(await getMealById(mealId));
 });
 
 mealsRouter.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
   const parsed = mealSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
 
-  const { dietaryTypeIds, suitableForMemberIds, preferredByMemberIds, ingredients: ingList, instructions, ...mealData } = parsed.data;
-  const [updated] = await db
-    .update(meals)
-    .set({
-      ...mealData,
-      instructions: JSON.stringify(instructions),
-      updatedByUserId: req.user!.userId,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(meals.id, id))
-    .returning();
+  const { mealData } = splitMealInput(parsed.data);
+  const found = await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(meals)
+      .set({ ...mealData, updatedByUserId: req.user!.userId, updatedAt: sqliteNow() })
+      .where(eq(meals.id, id))
+      .returning({ id: meals.id });
+    if (!updated) return false;
+    await replaceMealLinks(tx, id, parsed.data);
+    return true;
+  });
 
-  if (!updated) {
+  if (!found) {
     res.status(404).json({ error: 'Meal not found' });
     return;
   }
-
-  await db.delete(mealDietaryTypes).where(eq(mealDietaryTypes.mealId, id));
-  if (dietaryTypeIds.length > 0) {
-    await db.insert(mealDietaryTypes).values(dietaryTypeIds.map((dtId) => ({ mealId: id, dietaryTypeId: dtId })));
-  }
-
-  await db.delete(mealSuitableFor).where(eq(mealSuitableFor.mealId, id));
-  if (suitableForMemberIds.length > 0) {
-    await db.insert(mealSuitableFor).values(suitableForMemberIds.map((mid) => ({ mealId: id, familyMemberId: mid })));
-  }
-
-  await db.delete(mealPreferredBy).where(eq(mealPreferredBy.mealId, id));
-  if (preferredByMemberIds.length > 0) {
-    await db.insert(mealPreferredBy).values(preferredByMemberIds.map((mid) => ({ mealId: id, familyMemberId: mid })));
-  }
-
-  await db.delete(mealIngredients).where(eq(mealIngredients.mealId, id));
-  if (ingList.length > 0) {
-    await db.insert(mealIngredients).values(ingList.map((i) => ({ ...i, mealId: id })));
-  }
-
-  res.json({
-    ...updated,
-    instructions,
-    suitableForMemberIds,
-    preferredByMemberIds,
-  });
+  res.json(await getMealById(id));
 });
 
-mealsRouter.delete('/:id', async (_req: AuthRequest, res: Response): Promise<void> => {
-  const id = parseInt(_req.params.id, 10);
+mealsRouter.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
   const result = await db.delete(meals).where(eq(meals.id, id)).returning({ id: meals.id });
   if (result.length === 0) {
     res.status(404).json({ error: 'Meal not found' });

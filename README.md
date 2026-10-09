@@ -318,6 +318,14 @@ PORT=3001
 CLIENT_ORIGIN=http://192.168.1.70
 ```
 
+The API loads this file automatically on start (see `packages/api/.env.example`). In production it **refuses to start** unless `JWT_SECRET` is set to at least 32 characters. Generate one with:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Changing `JWT_SECRET` signs everyone out, so users must log in again.
+
 If serving frontend directly on port 3000 (without Caddy), use:
 
 ```env
@@ -478,11 +486,21 @@ Recipe pages are cached offline by the service worker.
 
 ## Security Notes
 
-- Passwords hashed with bcrypt (12 rounds)
-- Sessions: JWT in httpOnly cookie — not accessible to JavaScript
-- `/api/auth/setup` is disabled once the first user exists
+- Passwords hashed with bcrypt (12 rounds); failed logins are rate limited (10 per 15 minutes per IP)
+- Sessions: JWT in httpOnly cookie — not accessible to JavaScript. The session is re-checked against the database on every request, so deleting a user, changing their role or resetting their password takes effect immediately
+- The last remaining admin cannot be demoted or deleted
+- `/api/auth/setup` is disabled once the first user exists (and is atomic, so it can't create two admins)
 - All data routes require a valid session; admin routes check `role === "admin"`
-- Set a strong `JWT_SECRET` in production (32+ random characters)
+- Recipe import by URL only fetches public `http(s)` addresses (private/LAN/loopback addresses, redirects to them and oversized pages are refused)
+- Set a strong `JWT_SECRET` in production (32+ random characters); the API refuses to start without one
+- The session cookie is marked `Secure` automatically when `CLIENT_ORIGIN` starts with `https://` (override with `COOKIE_SECURE=true|false`). Browsers drop Secure cookies on plain-HTTP sites, so don't force it on without HTTPS. Service workers (offline mode) also need HTTPS — for a home server, use Tailscale HTTPS certificates or Caddy's `tls internal`, then set `CLIENT_ORIGIN=https://...`.
+
+## Tests
+
+```bash
+cd packages/api
+pnpm test        # shopping-list maths, CSV parser, SQL splitter, SSRF-safe fetch
+```
 
 ---
 

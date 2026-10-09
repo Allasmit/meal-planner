@@ -2,6 +2,8 @@ import { getCachedGet, setCachedGet } from './offline/cache';
 import { enqueueMutation } from './offline/queue';
 import { applyOptimisticPatch } from './offline/patch';
 import { refreshPendingCount, flushQueue, markSynced, markOffline, isOnline } from './offline/sync';
+import type { ProteinType } from './types';
+import { auth } from './stores/auth';
 
 const BASE = '/api';
 
@@ -17,10 +19,15 @@ const BASE = '/api';
 // like "the page never loads past the spinner".
 const FETCH_TIMEOUT_MS = 6_000;
 
+// Imports do real server-side work (fetching a page, OCR, PDF parsing) and can
+// legitimately take far longer than a normal API call. Aborting them early would
+// make the UI report "offline" while the server still creates the recipe.
+const IMPORT_TIMEOUT_MS = 120_000;
+
 type MealImportBody = {
   sourceUrl?: string;
   cost?: number | null;
-  proteinType?: 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'other' | null;
+  proteinType?: ProteinType | null;
   mealCategory?: 'dinner' | 'breakfast' | 'lunch' | 'baking' | 'treat' | 'snack' | null;
   leftoverBehaviour?: 'consumed_same' | 'fridge_next_day' | 'freezable';
   isFavourite?: boolean;
@@ -95,10 +102,16 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       ...options,
       // NOTE: spread after `...options` so a caller-supplied signal (none
       // currently pass one) would win; this is our own safety-net timeout.
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(path.startsWith('/import') ? IMPORT_TIMEOUT_MS : FETCH_TIMEOUT_MS),
     });
 
     if (!res.ok) {
+      // The session ended (expired, user removed, password reset): drop to the login screen
+      // instead of showing a confusing error on every page. Auth endpoints handle their own 401s.
+      if (res.status === 401 && !path.startsWith('/auth')) {
+        auth.clear();
+        throw new Error('Your session has expired. Please sign in again.');
+      }
       const body = await res.json().catch(() => ({ error: res.statusText }));
       const errVal = body?.error;
       const message =
@@ -131,6 +144,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       err instanceof TypeError ||
       (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError'));
     if (isNetworkFailure) {
+      // An import that outlives even the long import timeout is slow, not offline,
+      // and the server may still finish it - don't flip the whole app to offline.
+      if (path.startsWith('/import') && err instanceof DOMException) {
+        throw new Error('The import is taking longer than expected. Check the Meals list before trying again.');
+      }
       markOffline();
       if (isMutation) {
         if (isQueueable) return queueOfflineMutation<T>(path, method, options?.body as string | undefined);

@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { User } from './types';
+import type { User } from '../types';
 
 function createAuthStore() {
   const { subscribe, set, update } = writable<{
