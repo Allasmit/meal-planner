@@ -1,0 +1,44 @@
+# Caddy reverse proxy for the meal planner, with HTTPS.
+#
+# Why HTTPS: browsers only allow service workers (the app's offline mode) and Secure cookies on HTTPS sites
+# (or localhost). Over plain http://192.168.x.x the app works online but offline mode is unavailable.
+#
+# Pick ONE of the two options below, then set CLIENT_ORIGIN in packages/api/.env to the https:// address
+# you use in the browser (the session cookie becomes Secure automatically).
+
+# ── Option A: Tailscale (recommended — real, trusted certificates, works away from home) ─────────────────────
+#   1. Enable HTTPS in the Tailscale admin console and run:  tailscale cert <machine>.<tailnet>.ts.net
+#   2. Replace the site address with your machine name and point Caddy at the certificate files:
+#
+# <machine>.<tailnet>.ts.net {
+#     tls C:\caddy\certs\<machine>.<tailnet>.ts.net.crt C:\caddy\certs\<machine>.<tailnet>.ts.net.key
+#     import meal_planner
+# }
+
+# ── Option B: Caddy's own certificate authority (LAN only; each device must trust Caddy's root certificate) ───
+#   Run `caddy trust` on the server and install the exported root certificate on your phones.
+#
+meals.home.arpa {
+    tls internal
+    import meal_planner
+}
+
+# ── Shared configuration ───────────────────────────────────────────────────────────────────────────────────
+(meal_planner) {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "same-origin"
+        # The meal form can use the camera for photos.
+        Permissions-Policy "camera=(self), geolocation=(), microphone=()"
+        -Server
+    }
+
+    @api path /api/*
+    reverse_proxy @api 127.0.0.1:3001
+
+    reverse_proxy 127.0.0.1:3000
+}

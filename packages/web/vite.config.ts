@@ -68,20 +68,19 @@ export default defineConfig({
 							expiration: { maxEntries: 30, maxAgeSeconds: 7 * 24 * 60 * 60 },
 						},
 					},
+					// API data is cached in IndexedDB by src/lib/offline (it is per-user and wiped on sign-out), so
+					// there are deliberately no service-worker rules for /api/* data responses. (Regex url patterns
+					// anchored with ^/api never matched the full https://host/api/... URL anyway.)
+					//
+					// Meal photos are content-addressed (the file name is a hash), so they never change and can be
+					// served from cache first. Cleared on sign-out via clearOfflineData().
 					{
-						urlPattern: /^\/api\/meals\//,
-						method: 'GET',
-						handler: 'StaleWhileRevalidate',
-						options: { cacheName: 'meal-detail-cache', expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 } },
-					},
-					{
-						urlPattern: /^\/api\/(meals|family|planner|users)(\?.*)?$/,
-						method: 'GET',
-						handler: 'NetworkFirst',
+						urlPattern: ({ url }: { url: URL }) => url.pathname.startsWith('/api/images/'),
+						handler: 'CacheFirst',
 						options: {
-							cacheName: 'api-cache',
-							networkTimeoutSeconds: 4,
-							expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 },
+							cacheName: 'images-cache',
+							cacheableResponse: { statuses: [200] },
+							expiration: { maxEntries: 300, maxAgeSeconds: 90 * 24 * 60 * 60 },
 						},
 					},
 				],

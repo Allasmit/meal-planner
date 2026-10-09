@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
+  import { PROTEIN_LABELS, CATEGORY_LABELS, LEFTOVER_LABELS, entriesOf } from '$lib/constants';
   import type { DietaryType, Cuisine, Ingredient, IngredientCategory, MealFormData, FamilyMember } from '$lib/types';
 
   let { mealId = null }: { mealId?: number | null } = $props();
@@ -97,8 +98,9 @@
         await api.updateMeal(mealId, body);
         goto(`/meals/${mealId}`);
       } else {
-        const created = await api.createMeal(body) as any;
-        goto(`/meals/${created.id}`);
+        const created = await api.createMeal(body);
+        // Created while offline: it has no real page until it has synced, so go back to the list.
+        goto((created as { _offlinePending?: boolean })._offlinePending ? '/meals' : `/meals/${created.id}`);
       }
     } catch (e: any) {
       error = e.message ?? 'Save failed';
@@ -260,29 +262,11 @@
     form.imageUrl = '';
     imageError = '';
   }  
-  const PROTEIN_OPTIONS = [
-    { value: 'chicken', label: '🍗 Chicken' },
-    { value: 'red_meat', label: '🥩 Red Meat' },
-    { value: 'pork', label: '🐷 Pork' },
-    { value: 'fish', label: '🐟 Fish' },
-    { value: 'lamb', label: '🐑 Lamb' },
-    { value: 'vegetarian', label: '🥦 Vegetarian' },
-    { value: 'vegan', label: '🌱 Vegan' },
-    { value: 'other', label: '🍲 Other' },
-  ];
-  const CATEGORY_OPTIONS = [
-    { value: 'dinner', label: '🌙 Dinner' },
-    { value: 'breakfast', label: '☀️ Breakfast' },
-    { value: 'lunch', label: '🥪 Lunch' },
-    { value: 'baking', label: '🍞 Baking' },
-    { value: 'treat', label: '🍰 Treat' },
-    { value: 'snack', label: '🍎 Snack' },
-  ];
-  const LEFTOVER_OPTIONS = [
-    { value: 'consumed_same', label: '🍽️ Consumed same meal' },
-    { value: 'fridge_next_day', label: '🥡 Fridge — next day' },
-    { value: 'freezable', label: '❄️ Freezable' },
-  ];
+  const toOptions = <K extends string>(labels: Record<K, string>) =>
+    entriesOf(labels).map(([value, label]) => ({ value, label }));
+  const PROTEIN_OPTIONS = toOptions(PROTEIN_LABELS);
+  const CATEGORY_OPTIONS = toOptions(CATEGORY_LABELS);
+  const LEFTOVER_OPTIONS = toOptions(LEFTOVER_LABELS);
 </script>
 
 <form onsubmit={(e) => { e.preventDefault(); save(); }} class="max-w-2xl mx-auto p-4 space-y-6">
@@ -292,31 +276,31 @@
   <div class="rounded-xl shadow-sm p-4 space-y-4" style="background: var(--color-surface); border: 1px solid var(--color-border)">
     <div class="text-sm font-semibold uppercase mb-1" style="color: var(--color-text-muted)">Basic Info</div>
     <div>
-      <label class="label">Meal Name *</label>
-      <input type="text" bind:value={form.name} required class="input" placeholder="e.g. Chicken Curry" />
+      <label for="f279" class="label">Meal Name *</label>
+      <input id="f279" type="text" bind:value={form.name} required class="input" placeholder="e.g. Chicken Curry" />
     </div>
     <div>
-      <label class="label">Description</label>
-      <textarea bind:value={form.description} class="input" rows="2" placeholder="Short description…"></textarea>
+      <label for="f283" class="label">Description</label>
+      <textarea id="f283" bind:value={form.description} class="input" rows="2" placeholder="Short description…"></textarea>
     </div>
     <div class="grid grid-cols-2 gap-4">
       <div>
-        <label class="label">Prep Time (min)</label>
-        <input type="number" bind:value={form.prepTimeMinutes} min="0" class="input" />
+        <label for="f288" class="label">Prep Time (min)</label>
+        <input id="f288" type="number" bind:value={form.prepTimeMinutes} min="0" class="input" />
       </div>
       <div>
-        <label class="label">Cook Time (min)</label>
-        <input type="number" bind:value={form.cookTimeMinutes} min="0" class="input" />
+        <label for="f292" class="label">Cook Time (min)</label>
+        <input id="f292" type="number" bind:value={form.cookTimeMinutes} min="0" class="input" />
       </div>
     </div>
     <div class="grid grid-cols-2 gap-4">
       <div>
-        <label class="label">Servings</label>
-        <input type="number" bind:value={form.servings} min="1" class="input" />
+        <label for="f298" class="label">Servings</label>
+        <input id="f298" type="number" bind:value={form.servings} min="1" class="input" />
       </div>
       <div>
-        <label class="label">Difficulty</label>
-        <select bind:value={form.difficulty} class="input">
+        <label for="f302" class="label">Difficulty</label>
+        <select id="f302" bind:value={form.difficulty} class="input">
           <option value="easy">Easy</option>
           <option value="medium">Medium</option>
           <option value="hard">Hard</option>
@@ -325,23 +309,23 @@
     </div>
     <div class="grid grid-cols-2 gap-4">
       <div>
-        <label class="label">Cuisine</label>
-        <select bind:value={form.cuisineId} class="input">
+        <label for="f312" class="label">Cuisine</label>
+        <select id="f312" bind:value={form.cuisineId} class="input">
           <option value={null}>— Select —</option>
           {#each cuisines as c}<option value={c.id}>{c.name}</option>{/each}
         </select>
       </div>
       <div>
-        <label class="label">Estimated Cost (R)</label>
-        <input type="number" bind:value={form.cost} min="0" step="5" class="input" placeholder="e.g. 120" />
+        <label for="f319" class="label">Estimated Cost (R)</label>
+        <input id="f319" type="number" bind:value={form.cost} min="0" step="5" class="input" placeholder="e.g. 120" />
       </div>
     </div>
     <div>
-      <label class="label">Source URL (optional)</label>
-      <input type="url" bind:value={form.sourceUrl} class="input" placeholder="https://…" />
+      <label for="f324" class="label">Source URL (optional)</label>
+      <input id="f324" type="url" bind:value={form.sourceUrl} class="input" placeholder="https://…" />
     </div>
     <div onpaste={onImagePaste}>
-      <label class="label">{mealId && !form.imageUrl ? 'Add Image' : 'Image (URL, upload, or paste)'}</label>
+      <div class="label">{mealId && !form.imageUrl ? 'Add Image' : 'Image (URL, upload, or paste)'}</div>
 
       <div class="flex flex-wrap items-center gap-2">
         <input
@@ -393,7 +377,7 @@
     <div class="text-sm font-semibold uppercase mb-1" style="color: var(--color-text-muted)">Category & Protein</div>
 
     <div>
-      <label class="label">Meal Category</label>
+      <div class="label">Meal Category</div>
       <div class="flex flex-wrap gap-2">
         {#each CATEGORY_OPTIONS as opt}
           <button type="button"
@@ -407,7 +391,7 @@
     </div>
 
     <div>
-      <label class="label">Protein Type</label>
+      <div class="label">Protein Type</div>
       <div class="flex flex-wrap gap-2">
         {#each PROTEIN_OPTIONS as opt}
           <button type="button"
@@ -421,7 +405,7 @@
     </div>
 
     <div>
-      <label class="label">Leftover Behaviour</label>
+      <div class="label">Leftover Behaviour</div>
       <div class="flex flex-wrap gap-2">
         {#each LEFTOVER_OPTIONS as opt}
           <button type="button"
@@ -578,8 +562,8 @@
 
   <!-- Notes -->
   <div class="rounded-xl shadow-sm p-4" style="background: var(--color-surface); border: 1px solid var(--color-border)">
-    <label class="label">Notes</label>
-    <textarea bind:value={form.notes} class="input" rows="3" placeholder="Personal notes, tips, variations…"></textarea>
+    <label for="f565" class="label">Notes</label>
+    <textarea id="f565" bind:value={form.notes} class="input" rows="3" placeholder="Personal notes, tips, variations…"></textarea>
   </div>
 
   {#if error}<p class="text-sm rounded-lg px-3 py-2" style="color: var(--color-danger); background: var(--color-danger-light)">{error}</p>{/if}

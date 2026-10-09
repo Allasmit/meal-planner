@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
   import { DIFFICULTY_COLORS, DIFFICULTY_LABELS } from '$lib/utils';
+  import { PROTEIN_LABELS, CATEGORY_LABELS, LEFTOVER_LABELS } from '$lib/constants';
   import type { Meal } from '$lib/types';
 
   let meal = $state<Meal | null>(null);
@@ -10,32 +11,6 @@
   let deleting = $state(false);
 
   let id = $derived(parseInt($page.params.id ?? '', 10));
-
-  const PROTEIN_LABELS: Record<string, string> = {
-    chicken: '🍗 Chicken',
-    red_meat: '🥩 Red Meat',
-    pork: '🐷 Pork',
-    fish: '🐟 Fish',
-    lamb: '🐑 Lamb',
-    vegetarian: '🥦 Vegetarian',
-    vegan: '🌱 Vegan',
-    other: '🍲 Other',
-  };
-
-  const CATEGORY_LABELS: Record<string, string> = {
-    dinner: '🌙 Dinner',
-    breakfast: '☀️ Breakfast',
-    lunch: '🥪 Lunch',
-    baking: '🍞 Baking',
-    treat: '🍰 Treat',
-    snack: '🍎 Snack',
-  };
-
-  const LEFTOVER_LABELS: Record<string, string> = {
-    consumed_same: '🍽️ Consumed same meal',
-    fridge_next_day: '🥡 Fridge — next day',
-    freezable: '❄️ Freezable',
-  };
 
   // SvelteKit reuses this SAME component instance (does NOT remount, so
   // `onMount` would only ever fire once) when navigating directly between
@@ -136,17 +111,17 @@
       <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">🔥 Cook: {meal.cookTimeMinutes} min</span>
       <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">👥 Serves: {meal.servings}</span>
       <span class="text-sm px-3 py-1 rounded-full {DIFFICULTY_COLORS[meal.difficulty]}">{DIFFICULTY_LABELS[meal.difficulty]}</span>
-      {#if (meal as any).mealCategory}
-        <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-accent-light); color: var(--color-accent-text)">{CATEGORY_LABELS[(meal as any).mealCategory]}</span>
+      {#if meal.mealCategory}
+        <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-accent-light); color: var(--color-accent-text)">{CATEGORY_LABELS[meal.mealCategory]}</span>
       {/if}
-      {#if (meal as any).proteinType}
-        <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">{PROTEIN_LABELS[(meal as any).proteinType]}</span>
+      {#if meal.proteinType}
+        <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">{PROTEIN_LABELS[meal.proteinType]}</span>
       {/if}
-      {#if (meal as any).leftoverBehaviour}
-        <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">{LEFTOVER_LABELS[(meal as any).leftoverBehaviour]}</span>
+      {#if meal.leftoverBehaviour}
+        <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">{LEFTOVER_LABELS[meal.leftoverBehaviour]}</span>
       {/if}
-      {#if (meal as any).cost != null}
-        <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">💰 R{(meal as any).cost}</span>
+      {#if meal.cost != null}
+        <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-bg); color: var(--color-text-muted)">💰 R{meal.cost}</span>
       {/if}
       {#each (meal.dietaryTypes || []) as dt}
         <span class="text-sm px-3 py-1 rounded-full" style="background: var(--color-accent-light); color: var(--color-accent-text)">{dt.icon ?? ''} {dt.name}</span>
@@ -188,9 +163,9 @@
       </div>
     {/if}
 
-    {#if (meal as any).sourceUrl}
+    {#if meal.sourceUrl}
       <div class="print:hidden">
-        <a href={(meal as any).sourceUrl} target="_blank" rel="noopener noreferrer"
+        <a href={meal.sourceUrl} target="_blank" rel="noopener noreferrer"
           class="text-sm underline" style="color: var(--color-accent)">🔗 View original recipe →</a>
       </div>
     {/if}

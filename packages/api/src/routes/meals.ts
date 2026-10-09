@@ -2,6 +2,7 @@
 import { createRouter } from '../lib/router';
 import { parseId, parseIdList, parseOptionalNumber } from '../lib/params';
 import { sqliteNow, escapeLike } from '../lib/sqlite';
+import { isAcceptableImageUrl, resolveImageUrl } from '../lib/images';
 import { PROTEIN_TYPES, MEAL_CATEGORIES, LEFTOVER_BEHAVIOURS } from '../lib/enums';
 import { eq, and, lte, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
@@ -16,7 +17,7 @@ import {
   dietaryTypes,
   cuisines,
 } from '../db/schema';
-import { requireAuth, type AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/auth';
 import { z } from 'zod';
 
 export const mealsRouter = createRouter();
@@ -38,6 +39,22 @@ mealsRouter.get('/dietary-types', async (_req: Request, res: Response): Promise<
 
 mealsRouter.get('/cuisines', async (_req: Request, res: Response): Promise<void> => {
   res.json(await db.select().from(cuisines));
+});
+
+mealsRouter.patch('/ingredient-categories/:id', requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
+  const parsed = z.object({ hiddenFromShopping: z.boolean() }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  const [updated] = await db.update(ingredientCategories).set(parsed.data).where(eq(ingredientCategories.id, id)).returning();
+  if (!updated) {
+    res.status(404).json({ error: 'Category not found' });
+    return;
+  }
+  res.json(updated);
 });
 
 mealsRouter.get('/ingredient-categories', async (_req: Request, res: Response): Promise<void> => {
@@ -159,9 +176,42 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
   if (isSpecialOccasion !== undefined) conditions.push(eq(meals.isSpecialOccasion, isSpecialOccasion === 'true'));
   if (maxCostNum !== undefined) conditions.push(lte(meals.cost, maxCostNum));
 
-  const mealRows = conditions.length > 0
-    ? await db.select().from(meals).where(and(...conditions))
-    : await db.select().from(meals);
+  // Junction-table filters run in SQL so only matching meals (and their rows) are ever loaded.
+  if (dietaryIdList?.length) {
+    const ids = [...new Set(dietaryIdList)];
+    conditions.push(sql`${meals.id} IN (
+      SELECT meal_id FROM meal_dietary_types WHERE dietary_type_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+      GROUP BY meal_id HAVING COUNT(DISTINCT dietary_type_id) = ${ids.length})`);
+  }
+  if (ingredientIdList?.length) {
+    const ids = [...new Set(ingredientIdList)];
+    conditions.push(sql`${meals.id} IN (SELECT meal_id FROM meal_ingredients WHERE ingredient_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)}))`);
+  }
+  if (suitableIdList?.length) {
+    // A meal with no recorded suitability is treated as suitable for everyone.
+    const ids = [...new Set(suitableIdList)];
+    conditions.push(sql`(${meals.id} NOT IN (SELECT meal_id FROM meal_suitable_for) OR ${meals.id} IN (
+      SELECT meal_id FROM meal_suitable_for WHERE family_member_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+      GROUP BY meal_id HAVING COUNT(DISTINCT family_member_id) = ${ids.length}))`);
+  }
+  if (preferredIdList?.length) {
+    const ids = [...new Set(preferredIdList)];
+    conditions.push(sql`${meals.id} IN (
+      SELECT meal_id FROM meal_preferred_by WHERE family_member_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+      GROUP BY meal_id HAVING COUNT(DISTINCT family_member_id) = ${ids.length})`);
+  }
+
+  // Optional paging for large libraries: ?limit=50&offset=100. Without `limit` everything is returned.
+  const limit = parseOptionalNumber(req.query.limit);
+  const offset = parseOptionalNumber(req.query.offset);
+  if (limit === null || offset === null || (limit !== undefined && (limit < 1 || limit > 500)) || (offset !== undefined && offset < 0)) {
+    res.status(400).json({ error: 'Invalid paging value' });
+    return;
+  }
+
+  let query = db.select().from(meals).where(conditions.length > 0 ? and(...conditions) : undefined).orderBy(meals.id).$dynamic();
+  if (limit !== undefined) query = query.limit(Math.floor(limit)).offset(Math.floor(offset ?? 0));
+  const mealRows = await query;
 
   const mealIds = mealRows.map((m) => m.id);
   if (mealIds.length === 0) {
@@ -169,20 +219,15 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const [dietaryRows, ingredientRows] = await Promise.all([
-    db.select({
-      mealId: mealDietaryTypes.mealId,
-      dietaryTypeId: dietaryTypes.id,
-      name: dietaryTypes.name,
-      icon: dietaryTypes.icon,
-    })
+  const [dietaryRows, ingredientRows, suitableRows, preferredRows] = await Promise.all([
+    db.select({ mealId: mealDietaryTypes.mealId, id: dietaryTypes.id, name: dietaryTypes.name, icon: dietaryTypes.icon })
       .from(mealDietaryTypes)
       .innerJoin(dietaryTypes, eq(mealDietaryTypes.dietaryTypeId, dietaryTypes.id))
       .where(inArray(mealDietaryTypes.mealId, mealIds)),
     db.select({
       mealId: mealIngredients.mealId,
-      ingredientId: ingredients.id,
-      ingredientName: ingredients.name,
+      id: ingredients.id,
+      name: ingredients.name,
       quantity: mealIngredients.quantity,
       unit: mealIngredients.unit,
       notes: mealIngredients.notes,
@@ -190,98 +235,39 @@ mealsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
       .from(mealIngredients)
       .innerJoin(ingredients, eq(mealIngredients.ingredientId, ingredients.id))
       .where(inArray(mealIngredients.mealId, mealIds)),
-  ]);
-
-  let filteredIds = new Set(mealIds);
-
-  if (dietaryIdList) {
-    const ids = dietaryIdList;
-    filteredIds = new Set(
-      [...filteredIds].filter((id) => {
-        const mealDietIds = dietaryRows.filter((r) => r.mealId === id).map((r) => r.dietaryTypeId);
-        return ids.every((did) => mealDietIds.includes(did));
-      }),
-    );
-  }
-
-  if (ingredientIdList) {
-    const ids = ingredientIdList;
-    filteredIds = new Set(
-      [...filteredIds].filter((id) => {
-        const mealIngIds = ingredientRows.filter((r) => r.mealId === id).map((r) => r.ingredientId);
-        return ids.some((iid) => mealIngIds.includes(iid));
-      }),
-    );
-  }
-
-  if (suitableIdList) {
-    const memberIds = suitableIdList;
-    const suitableFilterRows = await db
-      .select({ mealId: mealSuitableFor.mealId, familyMemberId: mealSuitableFor.familyMemberId })
-      .from(mealSuitableFor)
-      .where(inArray(mealSuitableFor.mealId, [...filteredIds]));
-
-    filteredIds = new Set(
-      [...filteredIds].filter((id) => {
-        const suited = suitableFilterRows.filter((r) => r.mealId === id).map((r) => r.familyMemberId);
-        if (suited.length === 0) return true;
-        return memberIds.every((mid) => suited.includes(mid));
-      }),
-    );
-  }
-
-  if (preferredIdList) {
-    const memberIds = preferredIdList;
-    const preferredFilterRows = await db
-      .select({ mealId: mealPreferredBy.mealId, familyMemberId: mealPreferredBy.familyMemberId })
-      .from(mealPreferredBy)
-      .where(inArray(mealPreferredBy.mealId, [...filteredIds]));
-
-    filteredIds = new Set(
-      [...filteredIds].filter((id) => {
-        const preferred = preferredFilterRows.filter((r) => r.mealId === id).map((r) => r.familyMemberId);
-        return memberIds.every((mid) => preferred.includes(mid));
-      }),
-    );
-  }
-
-  const [suitableRows, preferredRows] = await Promise.all([
-    db.select({
-      mealId: mealSuitableFor.mealId,
-      familyMemberId: mealSuitableFor.familyMemberId,
-    })
+    db.select({ mealId: mealSuitableFor.mealId, familyMemberId: mealSuitableFor.familyMemberId })
       .from(mealSuitableFor)
       .where(inArray(mealSuitableFor.mealId, mealIds)),
-    db.select({
-      mealId: mealPreferredBy.mealId,
-      familyMemberId: mealPreferredBy.familyMemberId,
-    })
+    db.select({ mealId: mealPreferredBy.mealId, familyMemberId: mealPreferredBy.familyMemberId })
       .from(mealPreferredBy)
       .where(inArray(mealPreferredBy.mealId, mealIds)),
   ]);
 
-  const result = mealRows
-    .filter((m) => filteredIds.has(m.id))
-    .map((m) => ({
+  // Group once instead of re-scanning every row for every meal.
+  const groupBy = <T extends { mealId: number }>(rows: T[]) => {
+    const map = new Map<number, T[]>();
+    for (const row of rows) {
+      const list = map.get(row.mealId);
+      if (list) list.push(row);
+      else map.set(row.mealId, [row]);
+    }
+    return map;
+  };
+  const dietaryByMeal = groupBy(dietaryRows);
+  const ingredientsByMeal = groupBy(ingredientRows);
+  const suitableByMeal = groupBy(suitableRows);
+  const preferredByMeal = groupBy(preferredRows);
+
+  res.json(
+    mealRows.map((m) => ({
       ...m,
       instructions: JSON.parse(m.instructions || '[]'),
-      dietaryTypes: dietaryRows
-        .filter((r) => r.mealId === m.id)
-        .map(({ dietaryTypeId, name, icon }) => ({ id: dietaryTypeId, name, icon })),
-      ingredients: ingredientRows
-        .filter((r) => r.mealId === m.id)
-        .map(({ ingredientId, ingredientName, quantity, unit, notes }) => ({
-          id: ingredientId,
-          name: ingredientName,
-          quantity,
-          unit,
-          notes,
-        })),
-      suitableForMemberIds: suitableRows.filter((r) => r.mealId === m.id).map((r) => r.familyMemberId),
-      preferredByMemberIds: preferredRows.filter((r) => r.mealId === m.id).map((r) => r.familyMemberId),
-    }));
-
-  res.json(result);
+      dietaryTypes: (dietaryByMeal.get(m.id) ?? []).map(({ id, name, icon }) => ({ id, name, icon })),
+      ingredients: (ingredientsByMeal.get(m.id) ?? []).map(({ id, name, quantity, unit, notes }) => ({ id, name, quantity, unit, notes })),
+      suitableForMemberIds: (suitableByMeal.get(m.id) ?? []).map((r) => r.familyMemberId),
+      preferredByMemberIds: (preferredByMeal.get(m.id) ?? []).map((r) => r.familyMemberId),
+    })),
+  );
 });
 
 /** Loads one meal with its dietary types, ingredients and family links. Shared by GET/POST/PUT so they all return the same shape. */
@@ -342,7 +328,7 @@ const mealSchema = z.object({
   difficulty: z.enum(['easy', 'medium', 'hard']),
   cuisineId: z.number().int().optional().nullable(),
   instructions: z.array(z.string()),
-  imageUrl: z.string().url().optional().nullable().or(z.literal('')).transform((v) => v === '' ? null : v),
+  imageUrl: z.string().refine(isAcceptableImageUrl, 'Invalid image').optional().nullable().or(z.literal('')).transform((v) => v === '' ? null : v),
   isTested: z.boolean().default(false),
   notes: z.string().optional().nullable(),
   cost: z.number().min(0).optional().nullable(),
@@ -406,6 +392,8 @@ mealsRouter.post('/', async (req: AuthRequest, res: Response): Promise<void> => 
   }
 
   const { mealData } = splitMealInput(parsed.data);
+  // Inline photos become files on disk; the database only keeps their URL.
+  mealData.imageUrl = await resolveImageUrl(mealData.imageUrl);
   // One transaction: a failure part-way (e.g. an unknown ingredient id) leaves nothing behind.
   const mealId = await db.transaction(async (tx) => {
     const [meal] = await tx
@@ -429,6 +417,9 @@ mealsRouter.put('/:id', async (req: AuthRequest, res: Response): Promise<void> =
   }
 
   const { mealData } = splitMealInput(parsed.data);
+  // Saving a meal without touching its photo must always work, even if the stored value is an older format.
+  const [current] = await db.select({ imageUrl: meals.imageUrl }).from(meals).where(eq(meals.id, id)).limit(1);
+  if (!current || mealData.imageUrl !== current.imageUrl) mealData.imageUrl = await resolveImageUrl(mealData.imageUrl);
   const found = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(meals)

@@ -60,7 +60,6 @@ On first load you are redirected to `/setup` to create the admin account.
 
 > **Windows note:** If `pnpm` or `node` is not found, run this first in each terminal:
 > $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
-```raw
 
 ---
 
@@ -69,70 +68,49 @@ On first load you are redirected to `/setup` to create the admin account.
 ```
 Menu plan app/
 ├── README.md
-├── pnpm-workspace.yaml         <- monorepo package roots
-├── package.json
+├── docs/requirements.md        <- original product requirements
+├── deploy/Caddyfile.example    <- reverse proxy with HTTPS + security headers
+├── .github/workflows/ci.yml    <- type-check, tests and build on every push
+├── pnpm-workspace.yaml         <- monorepo roots + patched dependency overrides
 │
-├── packages/
-│   ├── api/                    <- Express backend
-│   │   ├── src/
-│   │   │   ├── index.ts            <- server entry point
-│   │   │   ├── db/
-│   │   │   │   ├── schema.ts           <- Drizzle table definitions
-│   │   │   │   ├── client.ts           <- SQLite connection
-│   │   │   │   ├── migrate.ts          <- runs SQL migrations on startup
-│   │   │   │   ├── seed.ts             <- seeds reference data
-│   │   │   │   └── migrations/
-│   │   │   │       └── 0001_initial_schema.sql
-│   │   │   ├── middleware/
-│   │   │   │   └── auth.ts             <- requireAuth / requireAdmin
-│   │   │   ├── lib/
-│   │   │   │   └── jwt.ts              <- sign / verify JWT
-│   │   │   └── routes/
-│   │   │       ├── auth.ts             <- /api/auth/*
-│   │   │       ├── users.ts            <- /api/users/* (admin only)
-│   │   │       ├── meals.ts            <- /api/meals/* + /api/ingredients/*
-│   │   │       └── planner.ts          <- /api/planner/* + shopping-list
-│   │   ├── data/
-│   │   │   └── mealplan.db         <- YOUR DATABASE — back this up!
-│   │   ├── drizzle.config.ts
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   │
-│   └── web/                    <- SvelteKit frontend
-│       ├── src/
-│       │   ├── app.html            <- HTML shell + PWA meta tags
-│       │   ├── app.css             <- @import tailwindcss
-│       │   ├── lib/
-│       │   │   ├── api.ts              <- all fetch() calls to the API
-│       │   │   ├── types.ts            <- shared TypeScript types
-│       │   │   ├── utils.ts            <- date helpers, MEAL_SLOTS, constants
-│       │   │   ├── stores/
-│       │   │   │   └── auth.ts         <- logged-in user Svelte store
-│       │   │   └── components/
-│       │   │       └── MealForm.svelte <- add/edit meal form (shared)
-│       │   └── routes/
-│       │       ├── +layout.svelte      <- nav bar + auth guard
-│       │       ├── +page.svelte        <- / redirects to /planner
-│       │       ├── login/
-│       │       ├── setup/              <- first-run admin creation
-│       │       ├── planner/            <- weekly calendar grid + meal picker
-│       │       ├── meals/
-│       │       │   ├── +page.svelte        <- meal browser + filters
-│       │       │   ├── new/
-│       │       │   └── [id]/
-│       │       │       ├── +page.svelte    <- recipe detail
-│       │       │       └── edit/
-│       │       ├── shopping-list/      <- grocery list + share
-│       │       └── settings/           <- user management + sign out
-│       ├── vite.config.ts      <- Tailwind + PWA plugins, /api proxy
-│       └── package.json
-```raw
+└── packages/
+    ├── api/                    <- Express backend
+    │   ├── src/
+    │   │   ├── index.ts            <- server entry: migrations -> image migration -> listen -> backups
+    │   │   ├── config.ts           <- loads .env, validates JWT_SECRET, cookie settings
+    │   │   ├── db/                 <- schema.ts, client.ts, migrate.ts, seed.ts, migrations/*.sql
+    │   │   ├── middleware/auth.ts  <- requireAuth (checks the DB every request) / requireAdmin
+    │   │   ├── lib/
+    │   │   │   ├── generator.ts        <- auto-generate rules + scoring (pure, tested)
+    │   │   │   ├── shopping.ts         <- shopping-list aggregation (pure, tested)
+    │   │   │   ├── units.ts            <- g/kg, ml/l, spoon-size normalisation
+    │   │   │   ├── ingredient-parser.ts<- "1 1/2 cups flour, sifted" -> qty/unit/name/notes
+    │   │   │   ├── safe-fetch.ts       <- SSRF-safe page fetching for imports
+    │   │   │   ├── images.ts           <- photos as content-addressed JPEG files
+    │   │   │   ├── ocr.ts              <- shared Tesseract worker
+    │   │   │   ├── backup.ts           <- daily backups + pruning
+    │   │   │   └── csv.ts, sql.ts, sqlite.ts, params.ts, router.ts, enums.ts, jwt.ts
+    │   │   └── routes/             <- auth, users, meals, planner, family, import, images
+    │   ├── assets/eng.traineddata  <- OCR language data (no runtime download)
+    │   ├── test/                   <- node:test unit tests (`pnpm test`)
+    │   └── data/                   <- YOUR DATA (git-ignored): mealplan.db, images/, backups/
+    │
+    └── web/                    <- SvelteKit frontend (Svelte 5 runes + Tailwind 4 + PWA)
+        └── src/
+            ├── lib/
+            │   ├── api.ts              <- typed client; 401 handling; offline fallbacks
+            │   ├── types.ts, constants.ts, utils.ts, job.svelte.ts
+            │   ├── offline/            <- IndexedDB cache, per-change outbox queue, sync, precache
+            │   ├── stores/auth.ts
+            │   └── components/         <- MealBrowser, MealCard, MealForm, FilterChip, Modal, OfflineIndicator
+            └── routes/                 <- planner, meals, family, shopping-list, import, settings, login, setup
+```
 
 ---
 
 ## API Reference
 
-All routes require a valid session cookie except: `/auth/login`, `/auth/logout`, `/auth/setup`, `/auth/setup-status`.
+All routes require a valid session cookie except: `/auth/login`, `/auth/logout`, `/auth/setup`, `/auth/setup-status` and `/health`. Errors are `{ "error": ... }` with a 4xx/5xx status.
 
 ### Auth
 
@@ -140,7 +118,7 @@ All routes require a valid session cookie except: `/auth/login`, `/auth/logout`,
 |---|---|---|
 | GET | `/api/auth/setup-status` | `{ setupRequired: true/false }` |
 | POST | `/api/auth/setup` | `{ username, displayName, password }` — first run only |
-| POST | `/api/auth/login` | `{ username, password }` — sets httpOnly cookie |
+| POST | `/api/auth/login` | `{ username, password }` — sets httpOnly cookie (rate limited) |
 | POST | `/api/auth/logout` | Clears cookie |
 | GET | `/api/auth/me` | Returns current user |
 
@@ -150,45 +128,62 @@ All routes require a valid session cookie except: `/auth/login`, `/auth/logout`,
 |---|---|---|
 | GET | `/api/users` | — |
 | POST | `/api/users` | `{ username, displayName, password, role }` |
-| PUT | `/api/users/:id` | `{ displayName?, role? }` |
+| PUT | `/api/users/:id` | `{ displayName?, role? }` — a role change signs that user out; the last admin can't be demoted |
 | DELETE | `/api/users/:id` | — |
-| POST | `/api/users/:id/reset-password` | `{ password }` |
+| POST | `/api/users/:id/reset-password` | `{ password }` — signs that user out |
 
-### Meals & Ingredients
+### Meals & ingredients
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/meals` | Filter query params below |
-| POST | `/api/meals` | Create with ingredients + instructions |
-| GET | `/api/meals/:id` | Full detail |
-| PUT | `/api/meals/:id` | Full replace |
+| GET | `/api/meals` | Filters and paging below. Each meal includes `ingredients`, `dietaryTypes`, `suitableForMemberIds`, `preferredByMemberIds` |
+| POST | `/api/meals` | Create (transactional). `imageUrl` may be an `https` URL or an inline `data:image/...` (saved as a file) |
+| GET | `/api/meals/:id` | Full detail (same shape as create/update responses) |
+| PUT | `/api/meals/:id` | Full replace (transactional) |
 | DELETE | `/api/meals/:id` | — |
-| GET | `/api/meals/ingredients` | `?search=` |
-| POST | `/api/meals/ingredients` | `{ name, categoryId?, defaultUnit? }` |
-| GET | `/api/meals/dietary-types` | Reference list |
-| GET | `/api/meals/cuisines` | Reference list |
-| GET | `/api/meals/ingredient-categories` | Reference list |
+| GET / POST | `/api/meals/ingredients` | `?search=` (matched literally) / `{ name, categoryId?, defaultUnit? }` |
+| PATCH | `/api/meals/ingredients/:id` | `{ name?, categoryId?, defaultUnit? }` |
+| GET | `/api/meals/dietary-types`, `/cuisines`, `/ingredient-categories` | Reference lists |
+| PATCH | `/api/meals/ingredient-categories/:id` | **admin** `{ hiddenFromShopping }` |
+| GET | `/api/images/:hash.jpg` | Meal photo (login required, cached forever) |
 
 **Meal filter query params:**
 ```
-search=curry
-dietaryTypeIds=1,3          comma-separated, ALL must match
-cuisineId=2
-difficulty=easy|medium|hard
-prepTimeMax=30              prep minutes
-ingredientIds=4,7           meals containing ANY of these
-isTested=true|false
+search=curry                 name contains (case-insensitive, literal)
+dietaryTypeIds=1,3           ALL must match
+ingredientIds=4,7            meal contains ANY of these
+suitableForMemberIds=1,2     meals suitable for ALL these members (meals with no record count as suitable for everyone)
+preferredByMemberIds=1       preferred by ALL these members
+cuisineId, difficulty, prepTimeMax, maxCost, isTested, isFavourite, isSpecialOccasion,
+proteinType, mealCategory, leftoverBehaviour
+limit=50&offset=0            optional paging (limit 1-500); omit for everything
+```
 
-### Planner & Shopping List
+### Planner & shopping list
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/planner?weekStart=YYYY-MM-DD` | All slots for the week |
-| PUT | `/api/planner/:date/:slot` | `{ mealId, servings, notes? }` |
+| PUT | `/api/planner/:date/:slot` | `{ mealId, servings?, notes? }` — atomic upsert |
 | DELETE | `/api/planner/:date/:slot` | Clear a slot |
-| GET | `/api/planner/shopping-list?weekStart=YYYY-MM-DD` | Aggregated, grouped by category |
+| GET | `/api/planner/shopping-list?weekStart=…&showHidden=true` | A meal planned twice counts twice; g/kg and ml/l are merged |
+| GET | `/api/planner/cost-summary?weekStart=…` | `{ weekCost, monthCost, monthlyBudget, mealsWithoutCost }` |
+| POST | `/api/planner/auto-generate` | `{ days: [{ date, slot, prepTimeLimitMinutes?, leftoversRequired?, familyMemberIds? }], overwriteExisting }` |
+| GET / PATCH | `/api/planner/rules`, `/rules/:id` | PATCH is **admin** only |
+| GET / PATCH | `/api/planner/settings` | `{ monthlyBudget, batchCookingDay }`; PATCH is **admin** only |
 
 Valid slots: `breakfast` `lunch` `dinner` `snack`
+
+**Auto-generate rules.** Hard: the slot's time limit, weekly protein/category caps (counting meals already planned), and suitability for the selected family members. Scored: slot/category fit, favourites, no repeats, a different protein from the previous day, members' preferences, leftovers on leftover days, and freezable meals on the batch-cooking day. A slot with no valid meal is left as it was and reported in `unfilled`.
+
+### Family & import
+
+| Method | Path | Notes |
+|---|---|---|
+| GET / POST | `/api/family` | `{ name, role, notes?, dietaryTypeIds }` |
+| PATCH / DELETE | `/api/family/:id` | — |
+| POST | `/api/import/url`, `/social`, `/parse-html`, `/text`, `/csv`, `/media` | Recipe imports. URL imports only fetch public addresses; `/media` takes an image or PDF (OCR) up to 15 MB; `/csv` reports per-row warnings |
+| GET | `/api/import/csv-template` | Example CSV |
 
 ---
 
@@ -196,18 +191,20 @@ Valid slots: `breakfast` `lunch` `dinner` `snack`
 
 | Table | Purpose |
 |---|---|
-| `users` | id, username, display_name, password_hash, role (admin/member) |
-| `dietary_types` | id, name, icon |
-| `cuisines` | id, name |
-| `ingredient_categories` | id, name, sort_order |
-| `ingredients` | id, name, category_id, default_unit |
-| `meals` | name, times, difficulty, cuisine_id, instructions (JSON), is_tested, created_by_user_id |
-| `meal_dietary_types` | meal_id, dietary_type_id (junction table) |
+| `users` | username, display_name, password_hash, role (admin/member), token_version |
+| `dietary_types`, `cuisines` | Reference lists |
+| `ingredient_categories` | name, sort_order, hidden_from_shopping |
+| `ingredients` | name, category_id, default_unit |
+| `meals` | times, difficulty, cuisine, instructions (JSON), cost, protein_type, meal_category, leftover_behaviour, favourite/special flags, image_url (a `/api/images/…` URL or external URL) |
+| `meal_dietary_types`, `meal_suitable_for`, `meal_preferred_by` | Junction tables |
 | `meal_ingredients` | meal_id, ingredient_id, quantity, unit, notes |
-| `meal_plans` | plan_date, meal_slot, meal_id, servings — UNIQUE(plan_date, meal_slot) |
-| `user_settings` | key, value (household key/value store) |
+| `meal_plans` | plan_date, meal_slot, meal_id, servings, leftovers/time limit — UNIQUE(plan_date, meal_slot) |
+| `family_members`, `family_member_dietary_types` | People and their dietary needs |
+| `weekly_rules` | Planner rules (protein/category caps, leftover days, batch day) |
+| `user_settings` | key/value (monthly budget, batch cooking day) |
+| `__migrations` | Applied SQL migrations |
 
-**Only file you need to back up:** `packages/api/data/mealplan.db`
+**Back up `packages/api/data/`** (the database *and* the `images/` folder). The API also writes a daily backup of the database to `data/backups/` (keeps 14; `BACKUP_ENABLED=false` / `BACKUP_KEEP=n` to change) and a backup before any migration.
 
 ---
 
@@ -334,12 +331,14 @@ CLIENT_ORIGIN=http://192.168.1.70:3000
 
 ### 5. Start app processes with PM2
 
+The API runs from its compiled output (`pnpm --filter api build` also copies the SQL migrations next to it); the web app runs from `build/index.js`.
+
 ```powershell
 cd C:\dev\meal-planner\packages\api
 $env:PORT = "3001"
 $env:NODE_ENV = "production"
 $env:CLIENT_ORIGIN = "http://192.168.1.70"
-pm2 start "pnpm exec tsx src/index.ts" --name meal-api --cwd "C:\dev\meal-planner\packages\api"
+pm2 start "node dist/index.js" --name meal-api --cwd "C:\dev\meal-planner\packages\api"
 
 cd C:\dev\meal-planner\packages\web
 pm2 start "node build\index.js" --name meal-web --cwd "C:\dev\meal-planner\packages\web"
@@ -356,6 +355,8 @@ pm2 logs meal-web
 ```
 
 ### 6. Configure Caddy reverse proxy (port 80)
+
+> **Recommended:** serve the app over HTTPS using [deploy/Caddyfile.example](deploy/Caddyfile.example) (Tailscale certificates or Caddy's internal CA), then set `CLIENT_ORIGIN=https://…`. Offline mode (service worker) only works over HTTPS. The plain-HTTP setup below still works for online use.
 
 Create:
 
@@ -498,17 +499,20 @@ Recipe pages are cached offline by the service worker.
 ## Tests
 
 ```bash
-cd packages/api
-pnpm test        # shopping-list maths, CSV parser, SQL splitter, SSRF-safe fetch
+pnpm test           # everything (API + web)
+pnpm check          # type-checks (tsc + svelte-check)
+pnpm build          # production build of both packages
 ```
+
+API tests (`packages/api/test`) cover the shopping list, auto-generator, ingredient parser, CSV parser, SQL splitter and the SSRF-safe fetcher. Web tests (Vitest) cover the offline queue and sync, and check that the web and API enum lists haven't drifted apart. CI runs all of this on every push (`.github/workflows/ci.yml`).
 
 ---
 
 ## Planned Features
 
 - **Google Calendar integration** — smart meal suggestions based on your schedule
-- **Offline sync** — write-while-offline, sync on reconnect via IndexedDB queue
 - **Nutritional info** — calories/macros per meal
+- **Servings scaling** — scale shopping-list quantities by a plan's servings (needs a way to edit servings per slot)
 - **Checkers Sixty60 deep link** — placeholder ready for when URI scheme is published
 
 ---

@@ -20,6 +20,7 @@ export interface IngredientCategory {
   id: number;
   name: string;
   sortOrder: number;
+  hiddenFromShopping: boolean;
 }
 
 export interface Ingredient {
@@ -31,9 +32,12 @@ export interface Ingredient {
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snack';
-export type ProteinType = 'chicken' | 'red_meat' | 'pork' | 'fish' | 'lamb' | 'vegetarian' | 'vegan' | 'other';
-export type MealCategory = 'dinner' | 'breakfast' | 'lunch' | 'baking' | 'treat' | 'snack';
-export type LeftoverBehaviour = 'consumed_same' | 'fridge_next_day' | 'freezable';
+export const PROTEIN_TYPES = ['chicken', 'red_meat', 'pork', 'fish', 'lamb', 'vegetarian', 'vegan', 'other'] as const;
+export type ProteinType = (typeof PROTEIN_TYPES)[number];
+export const MEAL_CATEGORIES = ['dinner', 'breakfast', 'lunch', 'baking', 'treat', 'snack'] as const;
+export type MealCategory = (typeof MEAL_CATEGORIES)[number];
+export const LEFTOVER_BEHAVIOURS = ['consumed_same', 'fridge_next_day', 'freezable'] as const;
+export type LeftoverBehaviour = (typeof LEFTOVER_BEHAVIOURS)[number];
 
 export interface MealIngredientEntry {
   id: number;
@@ -64,6 +68,7 @@ export interface Meal {
   isFavourite: boolean;
   isSpecialOccasion: boolean;
   createdByUserId: number | null;
+  updatedByUserId: number | null;
   createdAt: string;
   updatedAt: string;
   dietaryTypes: DietaryType[];
@@ -168,4 +173,48 @@ export interface PlannerRule {
 export interface PlannerSettings {
   monthlyBudget: number | null;
   batchCookingDay: number;
+}
+
+export interface FamilyMemberInput {
+  name: string;
+  role: FamilyMember['role'];
+  notes: string | null;
+  dietaryTypeIds: number[];
+}
+
+export interface CostSummary {
+  weekCost: number;
+  monthCost: number;
+  monthlyBudget: number | null;
+  /** Planned meals this week that have no cost entered, so the totals are lower bounds. */
+  mealsWithoutCost: number;
+}
+
+export interface AutoGenerateRequest {
+  days: {
+    date: string;
+    slot: MealSlot;
+    prepTimeLimitMinutes?: number | null;
+    leftoversRequired?: boolean;
+    familyMemberIds?: number[];
+  }[];
+  overwriteExisting: boolean;
+}
+
+export interface AutoGenerateResult {
+  generated: number;
+  unfilled: number;
+  suggestions: { date: string; slot: MealSlot; mealId: number | null; notes: string | null }[];
+}
+
+export interface ImportedMeal {
+  id: number;
+  name: string;
+  ingredientCount: number;
+}
+
+export interface CsvImportResult {
+  created: number;
+  errors: number;
+  results: { row: number; name: string; status: 'created' | 'error'; error?: string; warnings?: string[] }[];
 }

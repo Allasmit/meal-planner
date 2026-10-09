@@ -6,13 +6,15 @@
   import { flushQueue } from '$lib/offline/sync';
   import { queueLength } from '$lib/offline/queue';
   import { clearOfflineData } from '$lib/offline/clear';
-  import type { User, PlannerRule, PlannerSettings } from '$lib/types';
+  import type { User, PlannerRule, PlannerSettings, IngredientCategory } from '$lib/types';
 
   let users = $state<User[]>([]);
   let loadingUsers = $state(false);
 
   // Planner settings
   let rules = $state<PlannerRule[]>([]);
+  let categories = $state<IngredientCategory[]>([]);
+  let settingsError = $state('');
   let settings = $state<PlannerSettings>({ monthlyBudget: null, batchCookingDay: 0 });
   let settingsSaving = $state(false);
   let settingsSaved = $state(false);
@@ -36,9 +38,10 @@
   onMount(async () => {
     if ($isAdmin) await loadUsers();
     try {
-      [rules, settings] = await Promise.all([
-        api.getPlannerRules() as Promise<PlannerRule[]>,
-        api.getPlannerSettings() as Promise<PlannerSettings>,
+      [rules, settings, categories] = await Promise.all([
+        api.getPlannerRules(),
+        api.getPlannerSettings(),
+        api.getIngredientCategories(),
       ]);
     } catch { /* non-critical */ }
   });
@@ -97,16 +100,29 @@
   }
 
   async function toggleRule(rule: PlannerRule) {
-    await api.updatePlannerRule(rule.id, { isEnabled: !rule.isEnabled });
-    rules = rules.map((r) => r.id === rule.id ? { ...r, isEnabled: !r.isEnabled } : r);
+    settingsError = '';
+    try {
+      await api.updatePlannerRule(rule.id, { isEnabled: !rule.isEnabled });
+      rules = rules.map((r) => r.id === rule.id ? { ...r, isEnabled: !r.isEnabled } : r);
+    } catch (e: any) { settingsError = e.message; }
+  }
+
+  async function toggleCategory(category: IngredientCategory) {
+    settingsError = '';
+    try {
+      await api.setCategoryHiddenFromShopping(category.id, !category.hiddenFromShopping);
+      categories = categories.map((c) => c.id === category.id ? { ...c, hiddenFromShopping: !c.hiddenFromShopping } : c);
+    } catch (e: any) { settingsError = e.message; }
   }
 
   async function saveSettings() {
-    settingsSaving = true; settingsSaved = false;
+    settingsSaving = true; settingsSaved = false; settingsError = '';
     try {
       await api.updatePlannerSettings(settings);
       settingsSaved = true;
       setTimeout(() => settingsSaved = false, 2500);
+    } catch (e: any) {
+      settingsError = e.message;
     } finally {
       settingsSaving = false;
     }
@@ -131,34 +147,40 @@
   <!-- Planner settings -->
   <div class="rounded-xl shadow-sm p-4 space-y-4" style="background: var(--color-surface); border: 1px solid var(--color-border)">
     <div class="text-sm font-semibold uppercase" style="color: var(--color-text-muted)">Planner Settings</div>
+    {#if !$isAdmin}
+      <p class="text-xs" style="color: var(--color-text-muted)">Only an admin can change planner settings, rules and shopping categories.</p>
+    {/if}
 
     <div>
-      <label class="text-sm font-medium block mb-1" style="color: var(--color-text)">
+      <label for="monthly-budget" class="text-sm font-medium block mb-1" style="color: var(--color-text)">
         Monthly Budget {settings.monthlyBudget ? `· R${settings.monthlyBudget}` : '(not set)'}
       </label>
-      <input type="number" min="0" step="50" bind:value={settings.monthlyBudget} placeholder="e.g. 3000"
-        class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+      <input id="monthly-budget" type="number" min="0" step="50" bind:value={settings.monthlyBudget} placeholder="e.g. 3000" disabled={!$isAdmin}
+        class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-60"
         style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)" />
     </div>
 
     <div>
-      <label class="text-sm font-medium block mb-1" style="color: var(--color-text)">Preferred batch cooking day</label>
+      <div class="text-sm font-medium block mb-1" style="color: var(--color-text)">Preferred batch cooking day</div>
       <div class="flex flex-wrap gap-2">
         {#each DAY_NAMES as day, i}
           <button
             onclick={() => settings.batchCookingDay = i}
-            class="text-xs px-3 py-1.5 rounded-full border transition-colors"
+            disabled={!$isAdmin}
+            aria-pressed={settings.batchCookingDay === i}
+            class="text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-60"
             style="{settings.batchCookingDay === i ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
           >{day}</button>
         {/each}
       </div>
     </div>
 
-    <button onclick={saveSettings} disabled={settingsSaving}
+    <button onclick={saveSettings} disabled={settingsSaving || !$isAdmin}
       class="w-full py-2 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-60"
       style="background: var(--color-accent)">
       {settingsSaving ? 'Saving…' : settingsSaved ? '✅ Saved!' : 'Save Settings'}
     </button>
+    {#if settingsError}<p class="text-sm" role="alert" style="color: var(--color-danger)">{settingsError}</p>{/if}
   </div>
 
   <!-- Weekly rules -->
@@ -172,14 +194,43 @@
           </div>
           <button
             onclick={() => toggleRule(rule)}
-            class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 cursor-pointer"
+            disabled={!$isAdmin}
+            class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
             style="background: {rule.isEnabled ? 'var(--color-accent)' : 'var(--color-border)'};"
             role="switch"
+            aria-label={rule.label}
             aria-checked={rule.isEnabled}
           >
             <span
               class="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200"
               style="translate: {rule.isEnabled ? '20px' : '0px'}"
+            ></span>
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  <!-- Shopping list categories -->
+  {#if categories.length > 0}
+    <div class="rounded-xl shadow-sm p-4 space-y-3" style="background: var(--color-surface); border: 1px solid var(--color-border)">
+      <div class="text-sm font-semibold uppercase" style="color: var(--color-text-muted)">Shopping List</div>
+      <p class="text-xs" style="color: var(--color-text-muted)">Categories switched off here are hidden from the shopping list unless you tick "Show spices and pantry items".</p>
+      {#each categories as category}
+        <div class="flex items-center justify-between gap-3">
+          <div class="text-sm font-medium" style="color: var(--color-text)">{category.name}</div>
+          <button
+            onclick={() => toggleCategory(category)}
+            disabled={!$isAdmin}
+            class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+            style="background: {category.hiddenFromShopping ? 'var(--color-border)' : 'var(--color-accent)'};"
+            role="switch"
+            aria-label="Show {category.name} on the shopping list"
+            aria-checked={!category.hiddenFromShopping}
+          >
+            <span
+              class="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200"
+              style="translate: {category.hiddenFromShopping ? '0px' : '20px'}"
             ></span>
           </button>
         </div>

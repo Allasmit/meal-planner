@@ -11,6 +11,7 @@
 // online doesn't re-download every route + every meal every single time.
 import { api } from '$lib/api';
 import { cachePageUrl } from './page-cache';
+import type { Meal } from '$lib/types';
 
 const LAST_PRECACHE_KEY = 'menu-plan-last-full-precache-at';
 const MIN_INTERVAL_MS = 6 * 60 * 60 * 1000; // don't redo this more than every 6h unless forced
@@ -76,9 +77,9 @@ async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
  * reloads of any meal work, without paying for N-1 redundant SSR renders.
  */
 async function precacheAllMeals(): Promise<void> {
-	let meals: { id: number }[];
+	let meals: Meal[];
 	try {
-		meals = (await api.getMeals()) as { id: number }[];
+		meals = await api.getMeals();
 	} catch {
 		return; // offline, or not logged in - nothing more we can do right now
 	}
@@ -94,6 +95,8 @@ async function precacheAllMeals(): Promise<void> {
 	await mapWithConcurrency(meals, 2, async (meal) => {
 		try {
 			await api.getMeal(meal.id);
+			// Photos are served from /api/images/...; fetching them once lets the service worker cache them for offline use.
+			if (meal.imageUrl?.startsWith('/api/images/')) await fetch(meal.imageUrl, { credentials: 'same-origin' });
 		} catch {
 			/* ignore individual meal failures, keep going with the rest */
 		}

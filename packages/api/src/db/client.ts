@@ -4,7 +4,7 @@ import * as schema from './schema';
 import path from 'path';
 import fs from 'fs';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+export const DATA_DIR = path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }

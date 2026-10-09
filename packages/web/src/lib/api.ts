@@ -2,7 +2,11 @@ import { getCachedGet, setCachedGet } from './offline/cache';
 import { enqueueMutation } from './offline/queue';
 import { applyOptimisticPatch } from './offline/patch';
 import { refreshPendingCount, flushQueue, markSynced, markOffline, isOnline } from './offline/sync';
-import type { ProteinType } from './types';
+import type {
+  AutoGenerateRequest, AutoGenerateResult, CostSummary, CsvImportResult, Cuisine, DietaryType, FamilyMember,
+  FamilyMemberInput, ImportedMeal, Ingredient, IngredientCategory, Meal, MealCategory, MealFormData, MealPlan,
+  PlannerRule, PlannerSettings, ProteinType, LeftoverBehaviour, ShoppingListCategory, User,
+} from './types';
 import { auth } from './stores/auth';
 
 const BASE = '/api';
@@ -28,8 +32,8 @@ type MealImportBody = {
   sourceUrl?: string;
   cost?: number | null;
   proteinType?: ProteinType | null;
-  mealCategory?: 'dinner' | 'breakfast' | 'lunch' | 'baking' | 'treat' | 'snack' | null;
-  leftoverBehaviour?: 'consumed_same' | 'fridge_next_day' | 'freezable';
+  mealCategory?: MealCategory | null;
+  leftoverBehaviour?: LeftoverBehaviour;
   isFavourite?: boolean;
   isSpecialOccasion?: boolean;
 };
@@ -52,14 +56,15 @@ type SocialImportBody = MealImportBody & {
   comments?: string;
 };
 
-/** Queues a mutation for later sync and optimistically patches the local
- * read cache so offline UI reflects the pending change. Returns a stand-in
- * value; callers only ever `await` mutations without using the result. */
+/** Queues a mutation for later sync and optimistically patches the local read cache so offline UI reflects the
+ * pending change. For creates (POST) it returns `{ id: <temporary negative id>, _offlinePending: true }`; the queue
+ * swaps that id for the real one in later queued changes once the server has created the record. */
 async function queueOfflineMutation<T>(path: string, method: string, body?: string): Promise<T> {
-  await enqueueMutation(method, path, body);
-  await applyOptimisticPatch(method, path, body);
+  const tempId = method === 'POST' ? -Date.now() : undefined;
+  await enqueueMutation(method, path, body, tempId);
+  await applyOptimisticPatch(method, path, body, tempId);
   refreshPendingCount();
-  return { _offlinePending: true } as unknown as T;
+  return { id: tempId, _offlinePending: true } as unknown as T;
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -162,80 +167,76 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 }
 
+const json = (body: unknown) => JSON.stringify(body);
+
 export const api = {
   setupStatus: () => request<{ setupRequired: boolean }>('/auth/setup-status'),
   setup: (body: { username: string; displayName: string; password: string }) =>
-    request('/auth/setup', { method: 'POST', body: JSON.stringify(body) }),
+    request<User>('/auth/setup', { method: 'POST', body: json(body) }),
   login: (body: { username: string; password: string }) =>
-    request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
-  logout: () => request('/auth/logout', { method: 'POST' }),
-  me: () => request('/auth/me'),
+    request<User>('/auth/login', { method: 'POST', body: json(body) }),
+  logout: () => request<{ ok: true }>('/auth/logout', { method: 'POST' }),
+  me: () => request<User>('/auth/me'),
 
-  getUsers: () => request('/users'),
-  createUser: (body: object) =>
-    request('/users', { method: 'POST', body: JSON.stringify(body) }),
-  updateUser: (id: number, body: object) =>
-    request(`/users/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-  deleteUser: (id: number) => request(`/users/${id}`, { method: 'DELETE' }),
+  getUsers: () => request<User[]>('/users'),
+  createUser: (body: { username: string; displayName: string; password: string; role: User['role'] }) =>
+    request<User>('/users', { method: 'POST', body: json(body) }),
+  updateUser: (id: number, body: Partial<Pick<User, 'displayName' | 'role'>>) =>
+    request<User>(`/users/${id}`, { method: 'PUT', body: json(body) }),
+  deleteUser: (id: number) => request<{ ok: true }>(`/users/${id}`, { method: 'DELETE' }),
   resetPassword: (id: number, password: string) =>
-    request(`/users/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) }),
+    request<{ ok: true }>(`/users/${id}/reset-password`, { method: 'POST', body: json({ password }) }),
 
-  getDietaryTypes: () => request('/meals/dietary-types'),
-  getCuisines: () => request('/meals/cuisines'),
-  getIngredientCategories: () => request('/meals/ingredient-categories'),
+  getDietaryTypes: () => request<DietaryType[]>('/meals/dietary-types'),
+  getCuisines: () => request<Cuisine[]>('/meals/cuisines'),
+  getIngredientCategories: () => request<IngredientCategory[]>('/meals/ingredient-categories'),
+  setCategoryHiddenFromShopping: (id: number, hiddenFromShopping: boolean) =>
+    request<IngredientCategory>(`/meals/ingredient-categories/${id}`, { method: 'PATCH', body: json({ hiddenFromShopping }) }),
 
   getIngredients: (search?: string) =>
-    request(`/meals/ingredients${search ? `?search=${encodeURIComponent(search)}` : ''}`),
-  createIngredient: (body: object) =>
-    request('/meals/ingredients', { method: 'POST', body: JSON.stringify(body) }),
-  updateIngredient: (id: number, body: object) =>
-    request(`/meals/ingredients/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    request<Ingredient[]>(`/meals/ingredients${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+  createIngredient: (body: { name: string; categoryId?: number; defaultUnit?: string }) =>
+    request<Ingredient>('/meals/ingredients', { method: 'POST', body: json(body) }),
+  updateIngredient: (id: number, body: Partial<Pick<Ingredient, 'name' | 'categoryId' | 'defaultUnit'>>) =>
+    request<Ingredient>(`/meals/ingredients/${id}`, { method: 'PATCH', body: json(body) }),
 
   getMeals: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
-    return request(`/meals${qs}`);
+    return request<Meal[]>(`/meals${qs}`);
   },
-  getMeal: (id: number) => request(`/meals/${id}`),
-  createMeal: (body: object) =>
-    request('/meals', { method: 'POST', body: JSON.stringify(body) }),
-  updateMeal: (id: number, body: object) =>
-    request(`/meals/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-  deleteMeal: (id: number) => request(`/meals/${id}`, { method: 'DELETE' }),
+  getMeal: (id: number) => request<Meal>(`/meals/${id}`),
+  createMeal: (body: MealFormData) => request<Meal>('/meals', { method: 'POST', body: json(body) }),
+  updateMeal: (id: number, body: MealFormData) => request<Meal>(`/meals/${id}`, { method: 'PUT', body: json(body) }),
+  deleteMeal: (id: number) => request<{ ok: true }>(`/meals/${id}`, { method: 'DELETE' }),
 
-  getWeekPlan: (weekStart: string) => request(`/planner?weekStart=${weekStart}`),
-  setPlanSlot: (date: string, slot: string, body: object) =>
-    request(`/planner/${date}/${slot}`, { method: 'PUT', body: JSON.stringify(body) }),
+  getWeekPlan: (weekStart: string) => request<MealPlan[]>(`/planner?weekStart=${weekStart}`),
+  setPlanSlot: (date: string, slot: string, body: { mealId: number | null; servings?: number; notes?: string | null }) =>
+    request<MealPlan>(`/planner/${date}/${slot}`, { method: 'PUT', body: json(body) }),
   clearPlanSlot: (date: string, slot: string) =>
-    request(`/planner/${date}/${slot}`, { method: 'DELETE' }),
+    request<{ ok: true }>(`/planner/${date}/${slot}`, { method: 'DELETE' }),
   getShoppingList: (weekStart: string, showHidden = false) =>
-    request(`/planner/shopping-list?weekStart=${weekStart}${showHidden ? '&showHidden=true' : ''}`),
+    request<ShoppingListCategory[]>(`/planner/shopping-list?weekStart=${weekStart}${showHidden ? '&showHidden=true' : ''}`),
+  getCostSummary: (weekStart: string) => request<CostSummary>(`/planner/cost-summary?weekStart=${weekStart}`),
 
-  importUrl: (body: UrlImportBody) =>
-    request('/import/url', { method: 'POST', body: JSON.stringify(body) }),
-  importCsv: (csvText: string) =>
-    request('/import/csv', { method: 'POST', body: JSON.stringify({ csvText }) }),
-  importParseHtml: (body: HtmlImportBody) =>
-    request('/import/parse-html', { method: 'POST', body: JSON.stringify(body) }),
-  importParseText: (body: TextImportBody) =>
-    request('/import/text', { method: 'POST', body: JSON.stringify(body) }),
-  importSocial: (body: SocialImportBody) =>
-    request('/import/social', { method: 'POST', body: JSON.stringify(body) }),
-  importMedia: (formData: FormData) =>
-    request('/import/media', { method: 'POST', body: formData }),
+  importUrl: (body: UrlImportBody) => request<ImportedMeal>('/import/url', { method: 'POST', body: json(body) }),
+  importCsv: (csvText: string) => request<CsvImportResult>('/import/csv', { method: 'POST', body: json({ csvText }) }),
+  importParseHtml: (body: HtmlImportBody) => request<ImportedMeal>('/import/parse-html', { method: 'POST', body: json(body) }),
+  importParseText: (body: TextImportBody) => request<ImportedMeal>('/import/text', { method: 'POST', body: json(body) }),
+  importSocial: (body: SocialImportBody) => request<ImportedMeal>('/import/social', { method: 'POST', body: json(body) }),
+  importMedia: (formData: FormData) => request<ImportedMeal>('/import/media', { method: 'POST', body: formData }),
 
-  getFamilyMembers: () => request('/family'),
-  createFamilyMember: (body: object) =>
-    request('/family', { method: 'POST', body: JSON.stringify(body) }),
-  updateFamilyMember: (id: number, body: object) =>
-    request(`/family/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteFamilyMember: (id: number) => request(`/family/${id}`, { method: 'DELETE' }),
+  getFamilyMembers: () => request<FamilyMember[]>('/family'),
+  createFamilyMember: (body: FamilyMemberInput) => request<FamilyMember>('/family', { method: 'POST', body: json(body) }),
+  updateFamilyMember: (id: number, body: FamilyMemberInput) =>
+    request<FamilyMember>(`/family/${id}`, { method: 'PATCH', body: json(body) }),
+  deleteFamilyMember: (id: number) => request<{ ok: true }>(`/family/${id}`, { method: 'DELETE' }),
 
-  getPlannerRules: () => request('/planner/rules'),
-  updatePlannerRule: (id: number, body: object) =>
-    request(`/planner/rules/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  getPlannerSettings: () => request('/planner/settings'),
-  updatePlannerSettings: (body: object) =>
-    request('/planner/settings', { method: 'PATCH', body: JSON.stringify(body) }),
-  autoGenerateWeek: (body: object) =>
-    request('/planner/auto-generate', { method: 'POST', body: JSON.stringify(body) }),
+  getPlannerRules: () => request<PlannerRule[]>('/planner/rules'),
+  updatePlannerRule: (id: number, body: Partial<Pick<PlannerRule, 'label' | 'value' | 'isEnabled'>>) =>
+    request<PlannerRule>(`/planner/rules/${id}`, { method: 'PATCH', body: json(body) }),
+  getPlannerSettings: () => request<PlannerSettings>('/planner/settings'),
+  updatePlannerSettings: (body: Partial<PlannerSettings>) =>
+    request<{ ok: true }>('/planner/settings', { method: 'PATCH', body: json(body) }),
+  autoGenerateWeek: (body: AutoGenerateRequest) =>
+    request<AutoGenerateResult>('/planner/auto-generate', { method: 'POST', body: json(body) }),
 };

@@ -61,7 +61,7 @@ test('incompatible units stay on separate lines', () => {
 });
 
 test('pantry categories are hidden unless requested', () => {
-  const spice = row({ ingredientId: 2, ingredientName: 'Cumin', categoryId: 9, categoryName: 'Spices & Herbs', categorySortOrder: 9 });
+  const spice = row({ ingredientId: 2, ingredientName: 'Cumin', categoryId: 9, categoryName: 'Spices & Herbs', categorySortOrder: 9, categoryHidden: true });
   assert.equal(aggregateShoppingList([spice], new Map([[1, 1]]), false).length, 0);
   assert.equal(aggregateShoppingList([spice], new Map([[1, 1]]), true).length, 1);
 });

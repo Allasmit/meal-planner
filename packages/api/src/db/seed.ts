@@ -47,13 +47,14 @@ async function seed() {
       { name: 'Seafood', sortOrder: 3 },
       { name: 'Dairy & Eggs', sortOrder: 4 },
       { name: 'Bakery', sortOrder: 5 },
-      { name: 'Pantry & Dry Goods', sortOrder: 6 },
-      { name: 'Canned & Jarred', sortOrder: 7 },
-      { name: 'Condiments & Sauces', sortOrder: 8 },
-      { name: 'Spices & Herbs', sortOrder: 9 },
-      { name: 'Frozen', sortOrder: 10 },
-      { name: 'Beverages', sortOrder: 11 },
-      { name: 'Other', sortOrder: 99 },
+      // Pantry-style categories are hidden from the shopping list by default (see migration 0008).
+      { name: 'Pantry & Dry Goods', sortOrder: 6, hiddenFromShopping: true },
+      { name: 'Canned & Jarred', sortOrder: 7, hiddenFromShopping: true },
+      { name: 'Condiments & Sauces', sortOrder: 8, hiddenFromShopping: true },
+      { name: 'Spices & Herbs', sortOrder: 9, hiddenFromShopping: true },
+      { name: 'Frozen', sortOrder: 10, hiddenFromShopping: true },
+      { name: 'Beverages', sortOrder: 11, hiddenFromShopping: true },
+      { name: 'Other', sortOrder: 99, hiddenFromShopping: true },
     ])
     .onConflictDoNothing();
 

@@ -13,6 +13,25 @@
 
   let weekLabel = $derived(formatWeekRange(weekStart));
 
+  // Ticks survive reloads and navigating between weeks (stored per week on this device).
+  const TICKS_PREFIX = 'menu-plan-shopping-ticks:';
+  const ticksKey = () => TICKS_PREFIX + toDateString(weekStart);
+
+  function readTicks(): Set<string> {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(ticksKey()) ?? '[]'));
+    } catch {
+      return new Set();
+    }
+  }
+
+  function saveTicks() {
+    try {
+      if (checked.size === 0) localStorage.removeItem(ticksKey());
+      else localStorage.setItem(ticksKey(), JSON.stringify([...checked]));
+    } catch { /* storage unavailable - ticks just won't persist */ }
+  }
+
   onMount(() => loadList());
 
   let loadSeq = 0;
@@ -22,7 +41,7 @@
     const seq = ++loadSeq;
     loading = true;
     loadError = '';
-    checked = new Set();
+    checked = readTicks();
     try {
       const result = await api.getShoppingList(toDateString(weekStart), showSpices) as ShoppingListCategory[];
       if (seq === loadSeq) list = result;
@@ -45,6 +64,7 @@
     const s = new Set(checked);
     s.has(key) ? s.delete(key) : s.add(key);
     checked = s;
+    saveTicks();
   }
 
   function buildListText(): string {
@@ -75,22 +95,30 @@
   }
 
   const totalItems = $derived(list.reduce((sum, cat) => sum + cat.items.length, 0));
-  const checkedCount = $derived(checked.size);
+  // Only count ticks that belong to items currently on the list.
+  const checkedCount = $derived(list.reduce((n, cat) => n + cat.items.filter((i) => checked.has(`${cat.categoryId}::${i.ingredientId}::${i.unit}`)).length, 0));
+
+  function clearTicks() {
+    checked = new Set();
+    saveTicks();
+  }
 </script>
 
 <div class="max-w-2xl mx-auto p-4 space-y-4">
   <!-- Week nav -->
   <div class="flex items-center justify-between">
-    <button onclick={prevWeek} class="p-2 rounded-lg transition-colors hover:opacity-70" style="color: var(--color-text-muted)">◀</button>
+    <button onclick={prevWeek} aria-label="Previous week" class="p-2 rounded-lg transition-colors hover:opacity-70" style="color: var(--color-text-muted)">◀</button>
     <div class="text-center">
-      <div class="font-semibold text-gray-800 text-sm">{weekLabel}</div>
-      <div class="text-xs text-gray-400">{totalItems} items · {checkedCount} ticked off</div>
+      <div class="font-semibold text-sm" style="color: var(--color-text)">{weekLabel}</div>
+      <div class="text-xs" style="color: var(--color-text-muted)">{totalItems} items · {checkedCount} ticked off
+        {#if checkedCount > 0}· <button onclick={clearTicks} class="underline">clear</button>{/if}
+      </div>
     </div>
-    <button onclick={nextWeek} class="p-2 rounded-lg hover:bg-gray-200">▶</button>
+    <button onclick={nextWeek} aria-label="Next week" class="p-2 rounded-lg transition-colors hover:opacity-70" style="color: var(--color-text-muted)">▶</button>
   </div>
 
   {#if loading}
-    <div class="flex justify-center py-10"><div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div></div>
+    <div class="flex justify-center py-10" role="status" aria-label="Loading shopping list"><div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div></div>
   {:else if loadError}
     <div class="text-center py-10 space-y-3">
       <p class="text-sm" style="color: var(--color-danger)">{loadError}</p>
@@ -142,6 +170,8 @@
             {@const key = `${cat.categoryId}::${item.ingredientId}::${item.unit}`}
             <li class="px-4 py-3 flex items-center gap-3 border-b" style="border-color: var(--color-border)">
               <button onclick={() => toggleItem(key)}
+                aria-pressed={checked.has(key)}
+                aria-label="{checked.has(key) ? 'Untick' : 'Tick off'} {item.name}"
                 class="w-5 h-5 rounded border-2 shrink-0 transition-colors flex items-center justify-center"
                 style="{checked.has(key) ? 'background: var(--color-accent); border-color: var(--color-accent); color: white;' : 'border-color: var(--color-border);'}">
                 {#if checked.has(key)}<span class="text-xs leading-none">✓</span>{/if}

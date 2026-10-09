@@ -12,8 +12,12 @@ const LOCAL_STORAGE_KEYS = ['menu-plan-last-synced-at', 'menu-plan-last-full-pre
 export async function clearOfflineData(): Promise<void> {
   await clear().catch(() => {});
   await clearPageCache();
+  if (typeof caches !== 'undefined') await caches.delete('images-cache').catch(() => {});
   try {
     for (const key of LOCAL_STORAGE_KEYS) localStorage.removeItem(key);
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith('menu-plan-shopping-ticks:')) localStorage.removeItem(key);
+    }
   } catch {
     /* localStorage unavailable - nothing to clear */
   }

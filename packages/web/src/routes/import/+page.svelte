@@ -1,225 +1,113 @@
 <script lang="ts">
   import { api } from '$lib/api';
+  import { createJob } from '$lib/job.svelte';
+  import type { ImportedMeal, CsvImportResult } from '$lib/types';
 
-  type MealResult = { id: number; name: string; ingredientCount: number };
-
-  // Single URL import
-  let url = $state('');
-  let urlLoading = $state(false);
-  let urlResult = $state<MealResult | null>(null);
-  let urlError = $state('');
-
-  // Bulk URL import
-  let bulkUrls = $state('');
-  let bulkLoading = $state(false);
-  let bulkProgress = $state('');
-  let bulkResult = $state<{
+  type BulkResult = {
     created: number;
     errors: number;
     results: { row: number; url: string; status: 'created' | 'error'; error?: string }[];
-  } | null>(null);
-  let bulkError = $state('');
+  };
 
-  // Paste HTML import
+  // Each import method keeps its own loading / result / error state in a job.
+  const urlJob = createJob<ImportedMeal>();
+  const bulkJob = createJob<BulkResult>();
+  const htmlJob = createJob<ImportedMeal>();
+  const textJob = createJob<ImportedMeal>();
+  const socialJob = createJob<ImportedMeal>();
+  const csvJob = createJob<CsvImportResult>();
+  const mediaJob = createJob<ImportedMeal>();
+
+  let url = $state('');
+  let bulkUrls = $state('');
+  let bulkProgress = $state('');
   let htmlSourceUrl = $state('');
   let htmlText = $state('');
-  let htmlLoading = $state(false);
-  let htmlResult = $state<MealResult | null>(null);
-  let htmlError = $state('');
-
-  // Paste plain text import
   let textSourceUrl = $state('');
   let plainText = $state('');
-  let textLoading = $state(false);
-  let textResult = $state<MealResult | null>(null);
-  let textError = $state('');
-
-  // Social media post import
   let socialUrl = $state('');
   let socialCaption = $state('');
   let socialComments = $state('');
-  let socialLoading = $state(false);
-  let socialResult = $state<MealResult | null>(null);
-  let socialError = $state('');
-
-  // CSV import
   let csvFile = $state<FileList | null>(null);
-  let csvLoading = $state(false);
-  let csvResult = $state<{ created: number; errors: number; results: any[] } | null>(null);
-  let csvError = $state('');
-
-  // Media import (image / screenshot / camera / PDF)
   let mediaFile = $state<FileList | null>(null);
   let mediaSourceUrl = $state('');
-  let mediaLoading = $state(false);
-  let mediaResult = $state<MealResult | null>(null);
-  let mediaError = $state('');
 
-  async function importFromUrl() {
-    urlError = '';
-    urlResult = null;
-    urlLoading = true;
-    try {
-      urlResult = await api.importUrl({ url }) as any;
-    } catch (e: any) {
-      urlError = e.message;
-    } finally {
-      urlLoading = false;
-    }
-  }
+  const importFromUrl = () => urlJob.run(() => api.importUrl({ url }));
 
   function extractUrls(text: string): string[] {
-    return Array.from(
-      new Set(
-        text
-          .replace(/\r\n/g, '\n')
-          .match(/https?:\/\/[^\s]+/g) ?? []
-      )
-    );
+    return Array.from(new Set(text.replace(/\r\n/g, '\n').match(/https?:\/\/[^\s]+/g) ?? []));
   }
 
   async function importBulkUrls() {
-    bulkError = '';
-    bulkResult = null;
-
     const urls = extractUrls(bulkUrls);
     if (urls.length === 0) {
-      bulkError = 'Enter at least one URL';
+      bulkJob.fail('Enter at least one URL');
       return;
     }
 
-    bulkLoading = true;
-    try {
+    await bulkJob.run(async () => {
       // Sequential on purpose: each import fetches and parses a page server-side, and running
       // them in parallel overloads the server and risks timeouts on a modest home machine.
-      const results: { row: number; url: string; status: 'created' | 'error'; error?: string }[] = [];
-      for (const [index, currentUrl] of urls.entries()) {
-        bulkProgress = `Importing ${index + 1} of ${urls.length}…`;
-        try {
-          await api.importUrl({ url: currentUrl });
-          results.push({ row: index + 1, url: currentUrl, status: 'created' });
-        } catch (e: any) {
-          results.push({
-            row: index + 1,
-            url: currentUrl,
-            status: 'error',
-            error: e?.message ?? 'Failed to import recipe',
-          });
+      const results: BulkResult['results'] = [];
+      try {
+        for (const [index, currentUrl] of urls.entries()) {
+          bulkProgress = `Importing ${index + 1} of ${urls.length}…`;
+          try {
+            await api.importUrl({ url: currentUrl });
+            results.push({ row: index + 1, url: currentUrl, status: 'created' });
+          } catch (e: any) {
+            results.push({ row: index + 1, url: currentUrl, status: 'error', error: e?.message ?? 'Failed to import recipe' });
+          }
         }
+      } finally {
+        bulkProgress = '';
       }
-
-      bulkResult = {
+      return {
         created: results.filter((r) => r.status === 'created').length,
         errors: results.filter((r) => r.status === 'error').length,
         results,
       };
-    } catch (e: any) {
-      bulkError = e.message;
-    } finally {
-      bulkLoading = false;
-      bulkProgress = '';
-    }
+    });
   }
 
   async function importFromHtml() {
-    htmlError = '';
-    htmlResult = null;
-
-    if (!htmlText.trim()) {
-      htmlError = 'Paste page HTML first';
-      return;
-    }
-
-    htmlLoading = true;
-    try {
-      htmlResult = await api.importParseHtml({
-        html: htmlText,
-        sourceUrl: htmlSourceUrl.trim() || undefined,
-      }) as any;
-    } catch (e: any) {
-      htmlError = e.message;
-    } finally {
-      htmlLoading = false;
-    }
+    if (!htmlText.trim()) return htmlJob.fail('Paste page HTML first');
+    await htmlJob.run(() => api.importParseHtml({ html: htmlText, sourceUrl: htmlSourceUrl.trim() || undefined }));
   }
 
   async function importFromText() {
-    textError = '';
-    textResult = null;
-
-    if (!plainText.trim()) {
-      textError = 'Paste some recipe text first';
-      return;
-    }
-
-    textLoading = true;
-    try {
-      textResult = await api.importParseText({
-        text: plainText,
-        sourceUrl: textSourceUrl.trim() || undefined,
-      }) as any;
-    } catch (e: any) {
-      textError = e.message;
-    } finally {
-      textLoading = false;
-    }
+    if (!plainText.trim()) return textJob.fail('Paste some recipe text first');
+    await textJob.run(() => api.importParseText({ text: plainText, sourceUrl: textSourceUrl.trim() || undefined }));
   }
 
   async function importFromSocial() {
-    socialError = '';
-    socialResult = null;
-
     if (!socialUrl.trim() && !socialCaption.trim() && !socialComments.trim()) {
-      socialError = 'Enter a post URL, or paste the caption or comment text';
-      return;
+      return socialJob.fail('Enter a post URL, or paste the caption or comment text');
     }
-
-    socialLoading = true;
-    try {
-      socialResult = await api.importSocial({
+    await socialJob.run(() =>
+      api.importSocial({
         url: socialUrl.trim() || undefined,
         caption: socialCaption.trim() || undefined,
         comments: socialComments.trim() || undefined,
-      }) as any;
-    } catch (e: any) {
-      socialError = e.message;
-    } finally {
-      socialLoading = false;
-    }
+      }),
+    );
   }
 
   async function importCsv() {
-    if (!csvFile?.[0]) return;
-    csvError = '';
-    csvResult = null;
-    csvLoading = true;
-    try {
-      const csvText = await csvFile[0].text();
-      csvResult = await api.importCsv(csvText) as any;
-    } catch (e: any) {
-      csvError = e.message;
-    } finally {
-      csvLoading = false;
-    }
+    const file = csvFile?.[0];
+    if (!file) return;
+    await csvJob.run(async () => api.importCsv(await file.text()));
   }
 
   async function importMediaFile() {
-    if (!mediaFile?.[0]) return;
-    mediaError = '';
-    mediaResult = null;
-    mediaLoading = true;
-    try {
+    const file = mediaFile?.[0];
+    if (!file) return;
+    await mediaJob.run(() => {
       const formData = new FormData();
-      formData.append('file', mediaFile[0]);
-      if (mediaSourceUrl.trim()) {
-        formData.append('sourceUrl', mediaSourceUrl.trim());
-      }
-      mediaResult = await api.importMedia(formData) as any;
-    } catch (e: any) {
-      mediaError = e.message;
-    } finally {
-      mediaLoading = false;
-    }
+      formData.append('file', file);
+      if (mediaSourceUrl.trim()) formData.append('sourceUrl', mediaSourceUrl.trim());
+      return api.importMedia(formData);
+    });
   }
 
   function downloadTemplate() {
@@ -247,19 +135,19 @@
       />
       <button
         onclick={importFromUrl}
-        disabled={urlLoading || !url}
+        disabled={urlJob.loading || !url}
         class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors shrink-0"
       >
-        {urlLoading ? 'Importing…' : 'Import'}
+        {urlJob.loading ? 'Importing…' : 'Import'}
       </button>
     </div>
-    {#if urlError}
-      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{urlError}</div>
+    {#if urlJob.error}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{urlJob.error}</div>
     {/if}
-    {#if urlResult}
+    {#if urlJob.result}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
-        ✅ <strong>{urlResult.name}</strong> imported with {urlResult.ingredientCount} ingredients.
-        <a href="/meals/{urlResult.id}" class="underline ml-2">View recipe →</a>
+        ✅ <strong>{urlJob.result.name}</strong> imported with {urlJob.result.ingredientCount} ingredients.
+        <a href="/meals/{urlJob.result.id}" class="underline ml-2">View recipe →</a>
       </div>
     {/if}
   </div>
@@ -273,8 +161,8 @@
       </p>
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Source URL</label>
-      <input
+      <label for="f164" class="block text-sm font-medium text-gray-700">Source URL</label>
+      <input id="f164"
         type="url"
         bind:value={htmlSourceUrl}
         placeholder="https://example.com/recipe"
@@ -282,8 +170,8 @@
       />
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">HTML</label>
-      <textarea
+      <label for="f173" class="block text-sm font-medium text-gray-700">HTML</label>
+      <textarea id="f173"
         bind:value={htmlText}
         rows="10"
         spellcheck="false"
@@ -293,18 +181,18 @@
     </div>
     <button
       onclick={importFromHtml}
-      disabled={htmlLoading || !htmlText.trim()}
+      disabled={htmlJob.loading || !htmlText.trim()}
       class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
     >
-      {htmlLoading ? 'Importing…' : 'Import HTML'}
+      {htmlJob.loading ? 'Importing…' : 'Import HTML'}
     </button>
-    {#if htmlError}
-      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{htmlError}</div>
+    {#if htmlJob.error}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{htmlJob.error}</div>
     {/if}
-    {#if htmlResult}
+    {#if htmlJob.result}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
-        ✅ <strong>{htmlResult.name}</strong> imported with {htmlResult.ingredientCount} ingredients.
-        <a href="/meals/{htmlResult.id}" class="underline ml-2">View recipe →</a>
+        ✅ <strong>{htmlJob.result.name}</strong> imported with {htmlJob.result.ingredientCount} ingredients.
+        <a href="/meals/{htmlJob.result.id}" class="underline ml-2">View recipe →</a>
       </div>
     {/if}
   </div>
@@ -319,8 +207,8 @@
       </p>
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Optional source URL</label>
-      <input
+      <label for="f210" class="block text-sm font-medium text-gray-700">Optional source URL</label>
+      <input id="f210"
         type="url"
         bind:value={textSourceUrl}
         placeholder="https://example.com/recipe"
@@ -328,8 +216,8 @@
       />
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Recipe text</label>
-      <textarea
+      <label for="f219" class="block text-sm font-medium text-gray-700">Recipe text</label>
+      <textarea id="f219"
         bind:value={plainText}
         rows="10"
         spellcheck="false"
@@ -339,18 +227,18 @@
     </div>
     <button
       onclick={importFromText}
-      disabled={textLoading || !plainText.trim()}
+      disabled={textJob.loading || !plainText.trim()}
       class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
     >
-      {textLoading ? 'Importing…' : 'Import Text'}
+      {textJob.loading ? 'Importing…' : 'Import Text'}
     </button>
-    {#if textError}
-      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{textError}</div>
+    {#if textJob.error}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{textJob.error}</div>
     {/if}
-    {#if textResult}
+    {#if textJob.result}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
-        ✅ <strong>{textResult.name}</strong> imported with {textResult.ingredientCount} ingredients.
-        <a href="/meals/{textResult.id}" class="underline ml-2">View recipe →</a>
+        ✅ <strong>{textJob.result.name}</strong> imported with {textJob.result.ingredientCount} ingredients.
+        <a href="/meals/{textJob.result.id}" class="underline ml-2">View recipe →</a>
       </div>
     {/if}
   </div>
@@ -367,8 +255,8 @@
       </p>
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Post URL</label>
-      <input
+      <label for="f258" class="block text-sm font-medium text-gray-700">Post URL</label>
+      <input id="f258"
         type="url"
         bind:value={socialUrl}
         placeholder="https://www.instagram.com/p/..."
@@ -376,8 +264,8 @@
       />
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Caption / post text (paste if the URL fails)</label>
-      <textarea
+      <label for="f267" class="block text-sm font-medium text-gray-700">Caption / post text (paste if the URL fails)</label>
+      <textarea id="f267"
         bind:value={socialCaption}
         rows="6"
         spellcheck="false"
@@ -386,8 +274,8 @@
       ></textarea>
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Comments (paste the comment with the recipe, if that's where it is)</label>
-      <textarea
+      <label for="f277" class="block text-sm font-medium text-gray-700">Comments (paste the comment with the recipe, if that's where it is)</label>
+      <textarea id="f277"
         bind:value={socialComments}
         rows="6"
         spellcheck="false"
@@ -397,18 +285,18 @@
     </div>
     <button
       onclick={importFromSocial}
-      disabled={socialLoading || (!socialUrl.trim() && !socialCaption.trim() && !socialComments.trim())}
+      disabled={socialJob.loading || (!socialUrl.trim() && !socialCaption.trim() && !socialComments.trim())}
       class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
     >
-      {socialLoading ? 'Importing…' : 'Import Post'}
+      {socialJob.loading ? 'Importing…' : 'Import Post'}
     </button>
-    {#if socialError}
-      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{socialError}</div>
+    {#if socialJob.error}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{socialJob.error}</div>
     {/if}
-    {#if socialResult}
+    {#if socialJob.result}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
-        ✅ <strong>{socialResult.name}</strong> imported with {socialResult.ingredientCount} ingredients.
-        <a href="/meals/{socialResult.id}" class="underline ml-2">View recipe →</a>
+        ✅ <strong>{socialJob.result.name}</strong> imported with {socialJob.result.ingredientCount} ingredients.
+        <a href="/meals/{socialJob.result.id}" class="underline ml-2">View recipe →</a>
       </div>
     {/if}
   </div>
@@ -420,8 +308,8 @@
       <p class="text-sm text-gray-500 mt-1">Paste one recipe URL per line.</p>
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Recipe URLs</label>
-      <textarea
+      <label for="f311" class="block text-sm font-medium text-gray-700">Recipe URLs</label>
+      <textarea id="f311"
         bind:value={bulkUrls}
         rows="8"
         wrap="off"
@@ -432,25 +320,25 @@
     </div>
     <button
       onclick={importBulkUrls}
-      disabled={bulkLoading || !bulkUrls.trim()}
+      disabled={bulkJob.loading || !bulkUrls.trim()}
       class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
     >
-      {bulkLoading ? bulkProgress || 'Importing…' : 'Import URLs'}
+      {bulkJob.loading ? bulkProgress || 'Importing…' : 'Import URLs'}
     </button>
-    {#if bulkError}
-      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{bulkError}</div>
+    {#if bulkJob.error}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{bulkJob.error}</div>
     {/if}
-    {#if bulkResult}
+    {#if bulkJob.result}
       <div class="space-y-2">
         <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
-          ✅ {bulkResult.created} imported
-          {#if bulkResult.errors > 0}
-            · <span class="text-amber-700">{bulkResult.errors} failed</span>
+          ✅ {bulkJob.result.created} imported
+          {#if bulkJob.result.errors > 0}
+            · <span class="text-amber-700">{bulkJob.result.errors} failed</span>
           {/if}
         </div>
-        {#if bulkResult.errors > 0}
+        {#if bulkJob.result.errors > 0}
           <div class="space-y-1">
-            {#each bulkResult.results.filter((r) => r.status === 'error') as row}
+            {#each bulkJob.result.results.filter((r) => r.status === 'error') as row}
               <div class="text-xs text-red-600 bg-red-50 rounded px-3 py-1">
                 Row {row.row} ({row.url}): {row.error}
               </div>
@@ -476,8 +364,8 @@
       ⬇️ Download CSV Template
     </button>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">CSV file</label>
-      <input
+      <label for="f367" class="block text-sm font-medium text-gray-700">CSV file</label>
+      <input id="f367"
         type="file"
         accept=".csv,text/csv"
         bind:files={csvFile}
@@ -486,20 +374,20 @@
     </div>
     <button
       onclick={importCsv}
-      disabled={csvLoading || !csvFile?.[0]}
+      disabled={csvJob.loading || !csvFile?.[0]}
       class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
     >
-      {csvLoading ? 'Importing…' : 'Import CSV'}
+      {csvJob.loading ? 'Importing…' : 'Import CSV'}
     </button>
-    {#if csvError}
-      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{csvError}</div>
+    {#if csvJob.error}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{csvJob.error}</div>
     {/if}
-    {#if csvResult}
+    {#if csvJob.result}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800 space-y-1">
-        <div>✅ {csvResult.created} created, {csvResult.errors} errors</div>
-        {#each csvResult.results.filter((r) => r.status === 'error' || r.warnings?.length) as r}
+        <div>✅ {csvJob.result.created} created, {csvJob.result.errors} errors</div>
+        {#each csvJob.result.results.filter((r) => r.status === 'error' || r.warnings?.length) as r}
           <div class={r.status === 'error' ? 'text-red-700' : 'text-amber-700'}>
-            Row {r.row} ({r.name}): {r.status === 'error' ? r.error : r.warnings.join('; ')}
+            Row {r.row} ({r.name}): {r.status === 'error' ? r.error : r.warnings?.join('; ')}
           </div>
         {/each}
       </div>
@@ -515,8 +403,8 @@
       </p>
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Optional source URL</label>
-      <input
+      <label for="f406" class="block text-sm font-medium text-gray-700">Optional source URL</label>
+      <input id="f406"
         type="url"
         bind:value={mediaSourceUrl}
         placeholder="https://example.com/recipe"
@@ -524,8 +412,8 @@
       />
     </div>
     <div class="space-y-2">
-      <label class="block text-sm font-medium text-gray-700">Recipe file</label>
-      <input
+      <label for="f415" class="block text-sm font-medium text-gray-700">Recipe file</label>
+      <input id="f415"
         type="file"
         accept="image/*,application/pdf,.pdf"
         capture="environment"
@@ -536,18 +424,18 @@
     </div>
     <button
       onclick={importMediaFile}
-      disabled={mediaLoading || !mediaFile?.[0]}
+      disabled={mediaJob.loading || !mediaFile?.[0]}
       class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 transition-colors"
     >
-      {mediaLoading ? 'Importing…' : 'Import Media'}
+      {mediaJob.loading ? 'Importing…' : 'Import Media'}
     </button>
-    {#if mediaError}
-      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{mediaError}</div>
+    {#if mediaJob.error}
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{mediaJob.error}</div>
     {/if}
-    {#if mediaResult}
+    {#if mediaJob.result}
       <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
-        ✅ <strong>{mediaResult.name}</strong> imported with {mediaResult.ingredientCount} ingredients.
-        <a href="/meals/{mediaResult.id}" class="underline ml-2">View recipe →</a>
+        ✅ <strong>{mediaJob.result.name}</strong> imported with {mediaJob.result.ingredientCount} ingredients.
+        <a href="/meals/{mediaJob.result.id}" class="underline ml-2">View recipe →</a>
       </div>
     {/if}
   </div>

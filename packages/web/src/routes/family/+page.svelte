@@ -163,8 +163,8 @@
 
       <div class="space-y-3">
         <div>
-          <label class="text-sm font-medium block mb-1" style="color: var(--color-text-muted)">Name</label>
-          <input
+          <label for="f166" class="text-sm font-medium block mb-1" style="color: var(--color-text-muted)">Name</label>
+          <input id="f166"
             type="text"
             bind:value={formName}
             placeholder="e.g. Mum, Dad, Amy…"
@@ -174,7 +174,7 @@
         </div>
 
         <div>
-          <label class="text-sm font-medium block mb-1" style="color: var(--color-text-muted)">Role</label>
+          <div class="text-sm font-medium block mb-1" style="color: var(--color-text-muted)">Role</div>
           <div class="flex gap-2">
             {#each ['Adult', 'Teen', 'Child'] as r}
               <button
@@ -189,7 +189,7 @@
         </div>
 
         <div>
-          <label class="text-sm font-medium block mb-2" style="color: var(--color-text-muted)">Dietary Restrictions</label>
+          <div class="text-sm font-medium block mb-2" style="color: var(--color-text-muted)">Dietary Restrictions</div>
           <div class="flex flex-wrap gap-2">
             {#each dietaryTypes as dt}
               <button
@@ -204,8 +204,8 @@
         </div>
 
         <div>
-          <label class="text-sm font-medium block mb-1" style="color: var(--color-text-muted)">Likes / Dislikes (optional)</label>
-          <textarea
+          <label for="f207" class="text-sm font-medium block mb-1" style="color: var(--color-text-muted)">Likes / Dislikes (optional)</label>
+          <textarea id="f207"
             bind:value={formNotes}
             rows="2"
             placeholder="e.g. Loves pasta, hates mushrooms…"

@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store';
-import { getQueue, removeFromQueue } from './queue';
+import { getQueue, getFailed, removeFromQueue, markFailed, rewriteTempId, mentionsTempId } from './queue';
 
 const LAST_SYNCED_KEY = 'menu-plan-last-synced-at';
 const HEALTH_CHECK_TIMEOUT_MS = 4_000;
@@ -17,6 +17,8 @@ export interface SyncState {
    * clicks - there is no background polling. */
   online: boolean;
   pending: number;
+  /** Changes the server rejected; they stay listed until the user retries or dismisses them. */
+  failed: number;
   syncing: boolean;
   /** Epoch ms of the last confirmed successful round trip to the server. */
   lastSyncedAt: number | null;
@@ -26,6 +28,7 @@ function createSyncStore() {
   const { subscribe, update } = writable<SyncState>({
     online: typeof navigator !== 'undefined' ? navigator.onLine : true,
     pending: 0,
+    failed: 0,
     syncing: false,
     lastSyncedAt: readLastSyncedAt(),
   });
@@ -38,8 +41,8 @@ let initialized = false;
 let flushing = false;
 
 export async function refreshPendingCount(): Promise<void> {
-  const queue = await getQueue();
-  syncStatus.update((s) => ({ ...s, pending: queue.length }));
+  const [queue, failed] = await Promise.all([getQueue(), getFailed()]);
+  syncStatus.update((s) => ({ ...s, pending: queue.length, failed: failed.length }));
 }
 
 /** Call after any confirmed successful request to the API - marks the app as
@@ -118,16 +121,31 @@ export async function pingServer(): Promise<boolean> {
   return false;
 }
 
-/** Replays queued offline mutations against the real API, in order. Stops on
- * the first network failure (left queued for the next attempt); drops
- * mutations the server permanently rejects (4xx) so the queue can't jam. */
+/** Replays queued offline mutations against the real API, in order.
+ * - Success: removed; if it created a record, later changes that used its temporary id are rewritten to the real id.
+ * - 401 (session expired) or a network/server error: stop and keep everything queued for the next attempt.
+ * - Any other 4xx: the server permanently refuses it, so it is moved to the "failed" list (not silently dropped),
+ *   and later changes that depended on it are failed too. */
 export async function flushQueue(): Promise<void> {
   if (flushing || typeof navigator === 'undefined' || !navigator.onLine) return;
   flushing = true;
   syncStatus.update((s) => ({ ...s, syncing: true }));
   try {
-    const queue = await getQueue();
-    for (const item of queue) {
+    const brokenTempIds: number[] = [];
+    const seen = new Set<string>();
+    for (;;) {
+      // Re-read every time: sending a create rewrites temporary ids in the changes still waiting behind it.
+      const item = (await getQueue()).find((i) => !seen.has(i.id));
+      if (!item) break;
+      seen.add(item.id);
+
+      const dependsOnBroken = brokenTempIds.find((t) => mentionsTempId(item, t));
+      if (dependsOnBroken !== undefined) {
+        await markFailed(item.id, 'Depends on an earlier change that could not be saved.');
+        if (item.tempId !== undefined) brokenTempIds.push(item.tempId);
+        continue;
+      }
+
       try {
         const res = await fetch(`/api${item.path}`, {
           method: item.method,
@@ -135,24 +153,29 @@ export async function flushQueue(): Promise<void> {
           headers: item.body ? { 'Content-Type': 'application/json' } : undefined,
           body: item.body,
         });
-        if (res.status === 401) {
-          // Session expired: keep the change queued so it can be sent after signing back in.
-          break;
-        }
-        if (res.ok || (res.status >= 400 && res.status < 500)) {
-          if (!res.ok) {
-            console.warn('Dropping offline mutation rejected by server', item, res.status);
+
+        if (res.status === 401) break; // signed out: keep the change so it can be sent after signing back in
+
+        if (res.ok) {
+          if (item.tempId !== undefined) {
+            const created = await res.json().catch(() => null);
+            if (created && typeof created.id === 'number') await rewriteTempId(item.tempId, created.id);
           }
           await removeFromQueue(item.id);
           markSynced();
+        } else if (res.status >= 400 && res.status < 500) {
+          const body = await res.json().catch(() => null);
+          const detail = typeof body?.error === 'string' ? body.error : `The server refused this change (HTTP ${res.status}).`;
+          console.warn('Offline change rejected by server', item, res.status);
+          await markFailed(item.id, detail);
+          if (item.tempId !== undefined) brokenTempIds.push(item.tempId);
+          markSynced();
         } else {
-          // Server/network error - stop here, retry later.
-          markOffline();
+          markOffline(); // server/network error - retry later
           break;
         }
       } catch {
-        // Still offline - stop processing, remaining items stay queued.
-        markOffline();
+        markOffline(); // still offline - remaining items stay queued
         break;
       }
     }

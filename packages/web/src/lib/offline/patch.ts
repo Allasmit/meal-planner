@@ -55,13 +55,13 @@ async function patchPlannerSlot(method: string, planDate: string, mealSlot: stri
 /** Generic optimistic patch for simple `/resource/:id` CRUD endpoints
  * (meals, family, users, meals/ingredients): keeps any cached list/detail
  * responses in sync with pending create/update/delete mutations. */
-async function patchEntityCollections(basePath: string, method: string, id: number | undefined, body: any) {
+async function patchEntityCollections(basePath: string, method: string, id: number | undefined, body: any, tempId?: number) {
   if (method === 'POST') {
     // Create: prepend an optimistic item (temp negative id) to the unfiltered list cache only.
     const listPath = basePath;
     const existing = await getCachedGet<any[]>(listPath);
     if (Array.isArray(existing)) {
-      const optimistic = { id: -Date.now(), ...body, _pendingSync: true };
+      const optimistic = { id: tempId ?? -Date.now(), ...body, _pendingSync: true };
       await setCachedGet(listPath, [optimistic, ...existing]);
     }
     return;
@@ -104,7 +104,7 @@ async function patchEntityCollections(basePath: string, method: string, id: numb
  * This intentionally only understands a handful of endpoint shapes; anything
  * else is simply queued without a local cache update.
  */
-export async function applyOptimisticPatch(method: string, path: string, bodyRaw?: string): Promise<void> {
+export async function applyOptimisticPatch(method: string, path: string, bodyRaw?: string, tempId?: number): Promise<void> {
   const body = bodyRaw ? JSON.parse(bodyRaw) : undefined;
 
   const plannerMatch = path.match(/^\/planner\/(\d{4}-\d{2}-\d{2})\/(\w+)$/);
@@ -116,6 +116,6 @@ export async function applyOptimisticPatch(method: string, path: string, bodyRaw
   const entityMatch = path.match(/^\/(meals|family|users|meals\/ingredients)(?:\/(\d+))?$/);
   if (entityMatch) {
     const [, basePath, idStr] = entityMatch;
-    await patchEntityCollections(`/${basePath}`, method, idStr ? Number(idStr) : undefined, body);
+    await patchEntityCollections(`/${basePath}`, method, idStr ? Number(idStr) : undefined, body, tempId);
   }
 }

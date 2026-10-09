@@ -36,6 +36,7 @@ export const ingredientCategories = sqliteTable('ingredient_categories', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull().unique(),
   sortOrder: integer('sort_order').notNull().default(0),
+  hiddenFromShopping: integer('hidden_from_shopping', { mode: 'boolean' }).notNull().default(false),
 });
 
 // ─── Ingredients ──────────────────────────────────────────────────────────────

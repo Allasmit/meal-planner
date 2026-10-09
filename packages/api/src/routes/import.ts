@@ -2,6 +2,8 @@ import type { RequestHandler, Response } from 'express';
 import { createRouter } from '../lib/router';
 import { PROTEIN_TYPES, LEFTOVER_BEHAVIOURS, type ProteinType, type MealCategory } from '../lib/enums';
 import { parseCsv, normaliseName } from '../lib/csv';
+import { parseIngredientLine } from '../lib/ingredient-parser';
+import { resolveImageUrl, saveImageBuffer } from '../lib/images';
 import { safeFetchText, SafeFetchError } from '../lib/safe-fetch';
 import * as cheerio from 'cheerio';
 import { db } from '../db/client';
@@ -16,12 +18,12 @@ import {
   mealSuitableFor,
   familyMembers,
 } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { requireAuth, type AuthRequest } from '../middleware/auth';
 import { z } from 'zod';
 import multer from 'multer';
 import pdfParse from 'pdf-parse';
-import { createWorker, PSM, OEM } from 'tesseract.js';
+import { recognizeText } from '../lib/ocr';
 import sharp from 'sharp';
 
 export const importRouter = createRouter();
@@ -1082,7 +1084,7 @@ importRouter.post('/csv', async (req: AuthRequest, res: Response): Promise<void>
             ? (leftoverValue as 'consumed_same' | 'fridge_next_day' | 'freezable')
             : 'consumed_same',
           sourceUrl: normalizeOrNull(sourceUrl),
-          imageUrl: normalizeOrNull(imageUrl),
+          imageUrl: (await resolveImageUrl(normalizeOrNull(imageUrl))) ?? null,
           isTested: parseBool(isTestedStr),
           isFavourite: parseBool(isFavouriteStr),
           isSpecialOccasion: parseBool(isSpecialOccasionStr),
@@ -1300,113 +1302,103 @@ importRouter.post('/media', upload.single('file') as unknown as RequestHandler, 
 
 // ─── Shared persistence helpers ───────────────────────────────────────────────
 
-async function resolveIngredientIds(recipe: ParsedRecipe): Promise<{ name: string; id: number; quantity: number; unit: string }[]> {
-  const ingredientIds: { name: string; id: number; quantity: number; unit: string }[] = [];
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+function capitalise(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+async function resolveIngredients(
+  tx: Tx,
+  recipe: ParsedRecipe,
+): Promise<{ id: number; quantity: number; unit: string; notes: string | null }[]> {
+  const categories = await tx.select({ id: ingredientCategories.id, name: ingredientCategories.name }).from(ingredientCategories);
+  const categoryByName = new Map(categories.map((c) => [c.name, c.id]));
+  const resolved: { id: number; quantity: number; unit: string; notes: string | null }[] = [];
 
   for (const raw of recipe.ingredientStrings) {
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
+    if (!raw.trim()) continue;
+    const parsed = parseIngredientLine(raw);
 
-    const match = trimmed.match(/^([\d./½⅓⅔¼¾]+)?\s*([a-zA-Z]+)?\s+(.+)$/);
-    const quantity = match?.[1] ? parseFloat(match[1]) || 1 : 1;
-    const unit = match?.[2] ?? 'unit';
-    const name = match?.[3] ?? trimmed;
-
-    let [existing] = await db
-      .select({ id: ingredients.id, categoryId: ingredients.categoryId })
+    // Match existing ingredients regardless of capitalisation so "chicken breast" reuses "Chicken breast".
+    let [existing] = await tx
+      .select({ id: ingredients.id })
       .from(ingredients)
-      .where(eq(ingredients.name, name))
+      .where(sql`lower(${ingredients.name}) = ${parsed.name.toLowerCase()}`)
       .limit(1);
 
     if (!existing) {
-      const guessedCatName = guessCategoryFromName(name);
-      const [cat] = await db
-        .select({ id: ingredientCategories.id })
-        .from(ingredientCategories)
-        .where(eq(ingredientCategories.name, guessedCatName))
-        .limit(1);
-
-      [existing] = await db
+      [existing] = await tx
         .insert(ingredients)
-        .values({ name, defaultUnit: unit, categoryId: cat?.id ?? null })
-        .returning({ id: ingredients.id, categoryId: ingredients.categoryId });
+        .values({
+          name: capitalise(parsed.name),
+          defaultUnit: parsed.unit,
+          categoryId: categoryByName.get(guessCategoryFromName(parsed.name)) ?? null,
+        })
+        .returning({ id: ingredients.id });
     }
 
-    ingredientIds.push({ name, id: existing.id, quantity, unit });
+    resolved.push({ id: existing.id, quantity: parsed.quantity, unit: parsed.unit, notes: parsed.notes });
   }
 
-  return ingredientIds;
+  return resolved;
 }
 
+/** Creates the meal and everything attached to it in a single transaction, so a failure leaves nothing half-imported. */
 async function persistRecipe(
   recipe: ParsedRecipe,
   userId: number,
   overrides: ImportOverrides
 ): Promise<{ id: number; name: string; ingredientCount: number }> {
-  const ingredientIds = await resolveIngredientIds(recipe);
+  const imageUrl = (await resolveImageUrl(recipe.imageUrl)) ?? null;
 
-  const [meal] = await db.insert(meals).values({
-    name: recipe.name,
-    description: recipe.description,
-    prepTimeMinutes: recipe.prepTimeMinutes,
-    cookTimeMinutes: recipe.cookTimeMinutes,
-    servings: recipe.servings,
-    instructions: JSON.stringify(recipe.instructions),
-    imageUrl: recipe.imageUrl,
-    isTested: false,
-    sourceUrl: overrides.sourceUrl ?? null,
-    cost: overrides.cost ?? recipe.estimatedCost ?? null,
-    mealCategory: overrides.mealCategory ?? recipe.mealCategory ?? null,
-    proteinType: overrides.proteinType ?? null,
-    leftoverBehaviour: overrides.leftoverBehaviour ?? 'consumed_same',
-    isFavourite: overrides.isFavourite ?? false,
-    isSpecialOccasion: overrides.isSpecialOccasion ?? false,
-    notes: overrides.notes ?? 'Imported recipe',
-    createdByUserId: userId,
-    updatedByUserId: userId,
-  }).returning();
+  return db.transaction(async (tx) => {
+    const resolved = await resolveIngredients(tx, recipe);
 
-  if (ingredientIds.length > 0) {
-    await db.insert(mealIngredients).values(
-      ingredientIds.map((i) => ({
-        mealId: meal.id,
-        ingredientId: i.id,
-        quantity: i.quantity,
-        unit: i.unit,
-      }))
-    );
-  }
-
-  if (recipe.cuisine) {
-    const [cuisine] = await db
-      .select({ id: cuisines.id })
-      .from(cuisines)
-      .where(eq(cuisines.name, recipe.cuisine))
-      .limit(1);
-
-    if (cuisine) {
-      await db.update(meals).set({ cuisineId: cuisine.id }).where(eq(meals.id, meal.id));
+    let cuisineId: number | null = null;
+    if (recipe.cuisine) {
+      const [cuisine] = await tx.select({ id: cuisines.id }).from(cuisines).where(eq(cuisines.name, recipe.cuisine)).limit(1);
+      cuisineId = cuisine?.id ?? null;
     }
-  }
 
-  if (recipe.dietaryTypeNames.length > 0) {
-    for (const dietaryTypeName of recipe.dietaryTypeNames) {
-      const [dietaryType] = await db
-        .select({ id: dietaryTypes.id })
-        .from(dietaryTypes)
-        .where(eq(dietaryTypes.name, dietaryTypeName))
-        .limit(1);
+    const [meal] = await tx.insert(meals).values({
+      name: recipe.name,
+      description: recipe.description,
+      prepTimeMinutes: recipe.prepTimeMinutes,
+      cookTimeMinutes: recipe.cookTimeMinutes,
+      servings: recipe.servings,
+      cuisineId,
+      instructions: JSON.stringify(recipe.instructions),
+      imageUrl,
+      isTested: false,
+      sourceUrl: overrides.sourceUrl ?? null,
+      cost: overrides.cost ?? recipe.estimatedCost ?? null,
+      mealCategory: overrides.mealCategory ?? recipe.mealCategory ?? null,
+      proteinType: overrides.proteinType ?? null,
+      leftoverBehaviour: overrides.leftoverBehaviour ?? 'consumed_same',
+      isFavourite: overrides.isFavourite ?? false,
+      isSpecialOccasion: overrides.isSpecialOccasion ?? false,
+      notes: overrides.notes ?? 'Imported recipe',
+      createdByUserId: userId,
+      updatedByUserId: userId,
+    }).returning({ id: meals.id, name: meals.name });
 
-      if (dietaryType) {
-        await db.insert(mealDietaryTypes).values({
-          mealId: meal.id,
-          dietaryTypeId: dietaryType.id,
-        });
+    if (resolved.length > 0) {
+      await tx.insert(mealIngredients).values(
+        resolved.map((i) => ({ mealId: meal.id, ingredientId: i.id, quantity: i.quantity, unit: i.unit, notes: i.notes })),
+      );
+    }
+
+    const dietaryNames = [...new Set(recipe.dietaryTypeNames)];
+    if (dietaryNames.length > 0) {
+      const found = await tx.select({ id: dietaryTypes.id }).from(dietaryTypes).where(inArray(dietaryTypes.name, dietaryNames));
+      if (found.length > 0) {
+        await tx.insert(mealDietaryTypes).values(found.map((d) => ({ mealId: meal.id, dietaryTypeId: d.id })));
       }
     }
-  }
 
-  return { id: meal.id, name: meal.name, ingredientCount: ingredientIds.length };
+    return { id: meal.id, name: meal.name, ingredientCount: resolved.length };
+  });
 }
 
 // ─── Plain text / OCR parsing ─────────────────────────────────────────────────
@@ -1483,41 +1475,13 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 }
 
 async function extractTextFromImage(buffer: Buffer): Promise<string> {
-  let processedBuffer: Buffer;
-  try {
-    const meta = await sharp(buffer).metadata();
-    const width = meta.width ?? 0;
-    processedBuffer = await sharp(buffer)
-      .grayscale()
-      .normalize()
-      .sharpen()
-      .resize(Math.max(width, 2000), null, { fit: 'inside', withoutEnlargement: false })
-      .png()
-      .toBuffer();
-  } catch {
-    processedBuffer = buffer;
-  }
-
-  const worker = await createWorker('eng', OEM.LSTM_ONLY);
-  try {
-    await worker.setParameters({
-      tessedit_pageseg_mode: PSM.AUTO,
-      preserve_interword_spaces: '1',
-    });
-    const { data } = await worker.recognize(processedBuffer);
-    return (data.text || '').trim();
-  } finally {
-    await worker.terminate();
-  }
+  return recognizeText(buffer);
 }
 
+/** Saves the uploaded photo as the recipe image and returns its stored URL (null if it can't be processed). */
 async function extractImageDataUrl(buffer: Buffer): Promise<string | null> {
   try {
-    const compressed = await sharp(buffer)
-      .resize(900, 900, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 82 })
-      .toBuffer();
-    return `data:image/jpeg;base64,${compressed.toString('base64')}`;
+    return await saveImageBuffer(buffer);
   } catch {
     return null;
   }

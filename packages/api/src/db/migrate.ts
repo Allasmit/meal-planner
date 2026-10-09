@@ -2,6 +2,7 @@ import { libsqlClient } from './client';
 import path from 'path';
 import fs from 'fs';
 import { splitSqlStatements } from '../lib/sql';
+import { backupDatabase, pruneBackups } from '../lib/backup';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, 'migrations');
 
@@ -12,12 +13,8 @@ const FK_OFF_MARKER = '-- migrate:fk-off';
 
 async function backupBeforeMigrating(pendingCount: number, hasHistory: boolean): Promise<void> {
   if (!hasHistory || pendingCount === 0) return;
-  const backupDir = path.resolve(process.cwd(), 'data', 'backups');
-  fs.mkdirSync(backupDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const target = path.join(backupDir, `mealplan-pre-migration-${stamp}.db`);
-  await libsqlClient.execute(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
-  console.log(`Database backed up to ${target}`);
+  console.log(`Database backed up to ${await backupDatabase('mealplan-pre-migration')}`);
+  pruneBackups('mealplan-pre-migration', 10);
 }
 
 export async function runMigrations(): Promise<void> {

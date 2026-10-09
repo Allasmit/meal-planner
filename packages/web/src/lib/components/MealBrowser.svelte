@@ -1,14 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
-  import { DIFFICULTY_COLORS } from '$lib/utils';
-  import type {
-    Meal,
-    DietaryType,
-    Cuisine,
-    MealFilters,
-    FamilyMember,
-  } from '$lib/types';
+  import { PROTEIN_LABELS, PROTEIN_COLORS, CATEGORY_LABELS, LEFTOVER_LABELS, entriesOf } from '$lib/constants';
+  import FilterChip from './FilterChip.svelte';
+  import MealCard from './MealCard.svelte';
+  import type { Meal, DietaryType, Cuisine, MealFilters, FamilyMember } from '$lib/types';
 
   type Props = {
     selectable?: boolean;
@@ -30,8 +26,10 @@
   let familyMembers = $state<FamilyMember[]>([]);
   let loading = $state(false);
   let filterOpen = $state(false);
+  let loadSeq = 0;
+  let loadError = $state('');
 
-  let filters = $state<MealFilters>({
+  const emptyFilters = (): MealFilters => ({
     search: '',
     dietaryTypeIds: [],
     cuisineId: null,
@@ -49,16 +47,15 @@
     preferredByMemberIds: [],
   });
 
-  let loadSeq = 0;
-  let loadError = $state('');
+  let filters = $state<MealFilters>(emptyFilters());
 
   onMount(async () => {
     // Reference data only feeds the filter chips; a failure there shouldn't stop the meal list loading.
     try {
       [dietaryTypes, cuisines, familyMembers] = await Promise.all([
-        api.getDietaryTypes() as Promise<DietaryType[]>,
-        api.getCuisines() as Promise<Cuisine[]>,
-        api.getFamilyMembers() as Promise<FamilyMember[]>,
+        api.getDietaryTypes(),
+        api.getCuisines(),
+        api.getFamilyMembers(),
       ]);
     } catch { /* filters just stay empty */ }
     await loadMeals();
@@ -85,7 +82,7 @@
       if (filters.maxCost !== null) params.maxCost = String(filters.maxCost);
       if (filters.suitableForMemberIds.length) params.suitableForMemberIds = filters.suitableForMemberIds.join(',');
       if (filters.preferredByMemberIds.length) params.preferredByMemberIds = filters.preferredByMemberIds.join(',');
-      const result = await api.getMeals(params) as Meal[];
+      const result = await api.getMeals(params);
       if (seq === loadSeq) meals = result;
     } catch (e: any) {
       if (seq === loadSeq) loadError = e?.message ?? 'Could not load meals';
@@ -94,42 +91,17 @@
     }
   }
 
-  function toggleDietary(id: number) {
-    filters.dietaryTypeIds = filters.dietaryTypeIds.includes(id)
-      ? filters.dietaryTypeIds.filter((d) => d !== id)
-      : [...filters.dietaryTypeIds, id];
+  function toggleIn(list: number[], id: number): number[] {
+    return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
   }
 
-  function toggleMember(id: number) {
-    filters.suitableForMemberIds = filters.suitableForMemberIds.includes(id)
-      ? filters.suitableForMemberIds.filter((m) => m !== id)
-      : [...filters.suitableForMemberIds, id];
-  }
-
-  function togglePreferredMember(id: number) {
-    filters.preferredByMemberIds = filters.preferredByMemberIds.includes(id)
-      ? filters.preferredByMemberIds.filter((m) => m !== id)
-      : [...filters.preferredByMemberIds, id];
+  function toggleFlag(key: 'isFavourite' | 'isSpecialOccasion' | 'isTested') {
+    filters[key] = filters[key] === true ? null : true;
+    loadMeals();
   }
 
   function clearFilters() {
-    filters = {
-      search: '',
-      dietaryTypeIds: [],
-      cuisineId: null,
-      difficulty: '',
-      prepTimeMax: null,
-      ingredientIds: [],
-      isTested: null,
-      proteinType: '',
-      mealCategory: '',
-      leftoverBehaviour: '',
-      isFavourite: null,
-      isSpecialOccasion: null,
-      maxCost: null,
-      suitableForMemberIds: [],
-      preferredByMemberIds: [],
-    };
+    filters = emptyFilters();
     loadMeals();
   }
 
@@ -137,11 +109,6 @@
   function onSearchInput() {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(loadMeals, 300);
-  }
-
-  async function chooseMeal(meal: Meal) {
-    if (!selectable) return;
-    await onSelect?.(meal);
   }
 
   const activeFilterCount = $derived(
@@ -159,39 +126,7 @@
     (filters.preferredByMemberIds.length > 0 ? 1 : 0)
   );
 
-  const PROTEIN_LABELS: Record<string, string> = {
-    chicken: '🍗 Chicken',
-    red_meat: '🥩 Red Meat',
-    pork: '🐷 Pork',
-    fish: '🐟 Fish',
-    lamb: '🐑 Lamb',
-    vegetarian: '🥦 Vegetarian',
-    vegan: '🌱 Vegan',
-    other: '🍲 Other',
-  };
-  const PROTEIN_COLORS: Record<string, string> = {
-    chicken: '#f59e0b',
-    red_meat: '#ef4444',
-    pork: '#f97316',
-    fish: '#3b82f6',
-    lamb: '#84cc16',
-    vegetarian: '#22c55e',
-    vegan: '#10b981',
-    other: '#8b5cf6',
-  };
-  const CATEGORY_LABELS: Record<string, string> = {
-    dinner: '🌙 Dinner',
-    breakfast: '☀️ Breakfast',
-    lunch: '🥪 Lunch',
-    baking: '🍞 Baking',
-    treat: '🍰 Treat',
-    snack: '🍎 Snack',
-  };
-  const LEFTOVER_LABELS: Record<string, string> = {
-    consumed_same: '🍽️ Same meal',
-    fridge_next_day: '🥡 Fridge next day',
-    freezable: '❄️ Freezable',
-  };
+  const selectStyle = 'background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)';
 </script>
 
 <div class={embedded ? 'p-4 h-full min-h-0 flex flex-col' : 'p-4 max-w-4xl mx-auto'}>
@@ -202,22 +137,26 @@
         bind:value={filters.search}
         oninput={onSearchInput}
         placeholder="Search meals…"
+        aria-label="Search meals"
         class="w-full border rounded-xl px-4 py-2.5 pr-10 focus:outline-none focus:ring-2 focus:ring-green-500 shadow-sm"
         style="background: var(--color-surface); border-color: var(--color-border); color: var(--color-text)"
       />
-      <span class="absolute right-3 top-3" style="color: var(--color-text-muted)">🔍</span>
+      <span class="absolute right-3 top-3" style="color: var(--color-text-muted)" aria-hidden="true">🔍</span>
     </div>
 
     <button
       onclick={() => filterOpen = !filterOpen}
+      aria-expanded={filterOpen}
+      aria-label="Filters{activeFilterCount > 0 ? ` (${activeFilterCount} active)` : ''}"
       class="relative p-2.5 rounded-xl border shadow-sm transition-colors"
       style="background: var(--color-surface); border-color: {activeFilterCount > 0 ? 'var(--color-accent)' : 'var(--color-border)'}; color: {activeFilterCount > 0 ? 'var(--color-accent)' : 'var(--color-text-muted)'}"
     >
-      ⚙️
+      <span aria-hidden="true">⚙️</span>
       {#if activeFilterCount > 0}
         <span
           class="absolute -top-1 -right-1 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center"
           style="background: var(--color-accent)"
+          aria-hidden="true"
         >
           {activeFilterCount}
         </span>
@@ -239,42 +178,20 @@
     {#if filterOpen}
       <div class="rounded-xl shadow-sm p-4 mb-4 space-y-4 shrink-0" style="background: var(--color-surface); border: 1px solid var(--color-border)">
         <div class="flex flex-wrap gap-2">
-          <button
-            onclick={() => { filters.isFavourite = filters.isFavourite === true ? null : true; loadMeals(); }}
-            class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-            style="{filters.isFavourite === true ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-          >
-            ⭐ Favourites
-          </button>
-
-          <button
-            onclick={() => { filters.isSpecialOccasion = filters.isSpecialOccasion === true ? null : true; loadMeals(); }}
-            class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-            style="{filters.isSpecialOccasion === true ? 'background: #7c3aed; color: white; border-color: #7c3aed;' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-          >
-            🎉 Special Occasion
-          </button>
-
-          <button
-            onclick={() => { filters.isTested = filters.isTested === true ? null : true; loadMeals(); }}
-            class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-            style="{filters.isTested === true ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-          >
-            ✅ Tested
-          </button>
+          <FilterChip active={filters.isFavourite === true} onclick={() => toggleFlag('isFavourite')}>⭐ Favourites</FilterChip>
+          <FilterChip active={filters.isSpecialOccasion === true} onclick={() => toggleFlag('isSpecialOccasion')} color="#7c3aed">🎉 Special Occasion</FilterChip>
+          <FilterChip active={filters.isTested === true} onclick={() => toggleFlag('isTested')}>✅ Tested</FilterChip>
         </div>
 
         <div>
           <div class="text-xs font-semibold uppercase mb-2" style="color: var(--color-text-muted)">Protein</div>
           <div class="flex flex-wrap gap-2">
-            {#each Object.entries(PROTEIN_LABELS) as [val, label]}
-              <button
-                onclick={() => { filters.proteinType = filters.proteinType === val ? '' : val as any; loadMeals(); }}
-                class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-                style="{filters.proteinType === val ? `background: ${PROTEIN_COLORS[val]}; color: white; border-color: ${PROTEIN_COLORS[val]};` : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-              >
-                {label}
-              </button>
+            {#each entriesOf(PROTEIN_LABELS) as [val, label]}
+              <FilterChip
+                active={filters.proteinType === val}
+                color={PROTEIN_COLORS[val]}
+                onclick={() => { filters.proteinType = filters.proteinType === val ? '' : val; loadMeals(); }}
+              >{label}</FilterChip>
             {/each}
           </div>
         </div>
@@ -282,14 +199,11 @@
         <div>
           <div class="text-xs font-semibold uppercase mb-2" style="color: var(--color-text-muted)">Category</div>
           <div class="flex flex-wrap gap-2">
-            {#each Object.entries(CATEGORY_LABELS) as [val, label]}
-              <button
-                onclick={() => { filters.mealCategory = filters.mealCategory === val ? '' : val as any; loadMeals(); }}
-                class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-                style="{filters.mealCategory === val ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-              >
-                {label}
-              </button>
+            {#each entriesOf(CATEGORY_LABELS) as [val, label]}
+              <FilterChip
+                active={filters.mealCategory === val}
+                onclick={() => { filters.mealCategory = filters.mealCategory === val ? '' : val; loadMeals(); }}
+              >{label}</FilterChip>
             {/each}
           </div>
         </div>
@@ -297,14 +211,11 @@
         <div>
           <div class="text-xs font-semibold uppercase mb-2" style="color: var(--color-text-muted)">Leftovers</div>
           <div class="flex flex-wrap gap-2">
-            {#each Object.entries(LEFTOVER_LABELS) as [val, label]}
-              <button
-                onclick={() => { filters.leftoverBehaviour = filters.leftoverBehaviour === val ? '' : val as any; loadMeals(); }}
-                class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-                style="{filters.leftoverBehaviour === val ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-              >
-                {label}
-              </button>
+            {#each entriesOf(LEFTOVER_LABELS) as [val, label]}
+              <FilterChip
+                active={filters.leftoverBehaviour === val}
+                onclick={() => { filters.leftoverBehaviour = filters.leftoverBehaviour === val ? '' : val; loadMeals(); }}
+              >{label}</FilterChip>
             {/each}
           </div>
         </div>
@@ -314,13 +225,10 @@
             <div class="text-xs font-semibold uppercase mb-2" style="color: var(--color-text-muted)">Suitable For</div>
             <div class="flex flex-wrap gap-2">
               {#each familyMembers as m}
-                <button
-                  onclick={() => { toggleMember(m.id); loadMeals(); }}
-                  class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-                  style="{filters.suitableForMemberIds.includes(m.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-                >
-                  {m.name}
-                </button>
+                <FilterChip
+                  active={filters.suitableForMemberIds.includes(m.id)}
+                  onclick={() => { filters.suitableForMemberIds = toggleIn(filters.suitableForMemberIds, m.id); loadMeals(); }}
+                >{m.name}</FilterChip>
               {/each}
             </div>
           </div>
@@ -329,13 +237,10 @@
             <div class="text-xs font-semibold uppercase mb-2" style="color: var(--color-text-muted)">Preference</div>
             <div class="flex flex-wrap gap-2">
               {#each familyMembers as m}
-                <button
-                  onclick={() => { togglePreferredMember(m.id); loadMeals(); }}
-                  class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-                  style="{filters.preferredByMemberIds.includes(m.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-                >
-                  {m.name}
-                </button>
+                <FilterChip
+                  active={filters.preferredByMemberIds.includes(m.id)}
+                  onclick={() => { filters.preferredByMemberIds = toggleIn(filters.preferredByMemberIds, m.id); loadMeals(); }}
+                >{m.name}</FilterChip>
               {/each}
             </div>
           </div>
@@ -345,25 +250,23 @@
           <div class="text-xs font-semibold uppercase mb-2" style="color: var(--color-text-muted)">Dietary</div>
           <div class="flex flex-wrap gap-2">
             {#each dietaryTypes as dt}
-              <button
-                onclick={() => { toggleDietary(dt.id); loadMeals(); }}
-                class="text-xs px-3 py-1.5 rounded-full border transition-colors"
-                style="{filters.dietaryTypeIds.includes(dt.id) ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
-              >
-                {dt.icon ?? ''} {dt.name}
-              </button>
+              <FilterChip
+                active={filters.dietaryTypeIds.includes(dt.id)}
+                onclick={() => { filters.dietaryTypeIds = toggleIn(filters.dietaryTypeIds, dt.id); loadMeals(); }}
+              >{dt.icon ?? ''} {dt.name}</FilterChip>
             {/each}
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-xs font-semibold uppercase mb-1 block" style="color: var(--color-text-muted)">Difficulty</label>
+            <label for="filter-difficulty" class="text-xs font-semibold uppercase mb-1 block" style="color: var(--color-text-muted)">Difficulty</label>
             <select
+              id="filter-difficulty"
               bind:value={filters.difficulty}
               onchange={loadMeals}
               class="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)"
+              style={selectStyle}
             >
               <option value="">Any</option>
               <option value="easy">Easy</option>
@@ -373,12 +276,13 @@
           </div>
 
           <div>
-            <label class="text-xs font-semibold uppercase mb-1 block" style="color: var(--color-text-muted)">Cuisine</label>
+            <label for="filter-cuisine" class="text-xs font-semibold uppercase mb-1 block" style="color: var(--color-text-muted)">Cuisine</label>
             <select
+              id="filter-cuisine"
               bind:value={filters.cuisineId}
               onchange={loadMeals}
               class="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)"
+              style={selectStyle}
             >
               <option value={null}>Any</option>
               {#each cuisines as c}
@@ -389,10 +293,11 @@
         </div>
 
         <div>
-          <label class="text-xs font-semibold uppercase mb-1 block" style="color: var(--color-text-muted)">
+          <label for="filter-time" class="text-xs font-semibold uppercase mb-1 block" style="color: var(--color-text-muted)">
             Max Total Time {filters.prepTimeMax ? `· ${filters.prepTimeMax} min` : ''}
           </label>
           <input
+            id="filter-time"
             type="range"
             min="5"
             max="120"
@@ -410,7 +315,7 @@
     {/if}
 
     {#if loading}
-      <div class="flex justify-center py-10">
+      <div class="flex justify-center py-10" role="status" aria-label="Loading meals">
         <div class="animate-spin rounded-full h-8 w-8 border-4 border-green-600 border-t-transparent"></div>
       </div>
     {:else if loadError}
@@ -434,94 +339,11 @@
     {:else}
       <div class="text-xs mb-3" style="color: var(--color-text-muted)">{meals.length} meal{meals.length === 1 ? '' : 's'}</div>
       <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {#each meals as meal}
+        {#each meals as meal (meal.id)}
           {#if selectable}
-            <button
-              type="button"
-              onclick={() => chooseMeal(meal)}
-              class="rounded-xl shadow-sm p-4 hover:shadow-md transition-shadow block relative overflow-hidden text-left w-full"
-              style="background: var(--color-surface); border: 1px solid var(--color-border)"
-            >
-              {#if meal.imageUrl}
-                <div class="mb-3 -mx-4 -mt-4 overflow-hidden rounded-t-xl">
-                  <img src={meal.imageUrl} alt={meal.name} class="h-40 w-full object-cover block" loading="lazy" />
-                </div>
-              {/if}
-
-              {#if meal.proteinType}
-                <div class="absolute top-0 left-0 w-1 h-full rounded-l-xl" style="background: {PROTEIN_COLORS[meal.proteinType]}"></div>
-              {/if}
-
-              <div class="flex items-start justify-between gap-2" class:pl-2={!!meal.proteinType}>
-                <h3 class="font-semibold leading-tight" style="color: var(--color-text)">{meal.name}</h3>
-                <div class="flex items-center gap-1 shrink-0">
-                  {#if meal.isFavourite}<span title="Favourite">⭐</span>{/if}
-                  {#if meal.isSpecialOccasion}<span title="Special Occasion">🎉</span>{/if}
-                  {#if !meal.isTested}<span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">🧪</span>{/if}
-                </div>
-              </div>
-
-              {#if meal.description}
-                <p class="text-sm mt-1 line-clamp-2" style="color: var(--color-text-muted)" class:pl-2={!!meal.proteinType}>{meal.description}</p>
-              {/if}
-
-              <div class="flex items-center gap-2 mt-2 flex-wrap" class:pl-2={!!meal.proteinType}>
-                <span class="text-xs" style="color: var(--color-text-muted)">⏱ {meal.prepTimeMinutes + meal.cookTimeMinutes}m</span>
-                <span class="text-xs px-2 py-0.5 rounded {DIFFICULTY_COLORS[meal.difficulty]}">{meal.difficulty}</span>
-                {#if meal.leftoverBehaviour !== 'consumed_same'}
-                  <span class="text-xs" title={LEFTOVER_LABELS[meal.leftoverBehaviour]}>{meal.leftoverBehaviour === 'freezable' ? '❄️' : '🥡'}</span>
-                {/if}
-                {#if meal.cost != null}
-                  <span class="text-xs" style="color: var(--color-text-muted)">R{meal.cost.toFixed(0)}</span>
-                {/if}
-                {#each (meal.dietaryTypes || []).slice(0, 3) as dt}
-                  <span class="text-xs" style="color: var(--color-text-muted)">{dt.icon ?? ''}</span>
-                {/each}
-              </div>
-            </button>
+            <MealCard {meal} onselect={(m) => onSelect?.(m)} />
           {:else}
-            <a
-              href="/meals/{meal.id}"
-              class="rounded-xl shadow-sm p-4 hover:shadow-md transition-shadow block relative overflow-hidden"
-              style="background: var(--color-surface); border: 1px solid var(--color-border)"
-            >
-              {#if meal.imageUrl}
-                <div class="mb-3 -mx-4 -mt-4 overflow-hidden rounded-t-xl">
-                  <img src={meal.imageUrl} alt={meal.name} class="h-40 w-full object-cover block" loading="lazy" />
-                </div>
-              {/if}
-
-              {#if meal.proteinType}
-                <div class="absolute top-0 left-0 w-1 h-full rounded-l-xl" style="background: {PROTEIN_COLORS[meal.proteinType]}"></div>
-              {/if}
-
-              <div class="flex items-start justify-between gap-2" class:pl-2={!!meal.proteinType}>
-                <h3 class="font-semibold leading-tight" style="color: var(--color-text)">{meal.name}</h3>
-                <div class="flex items-center gap-1 shrink-0">
-                  {#if meal.isFavourite}<span title="Favourite">⭐</span>{/if}
-                  {#if meal.isSpecialOccasion}<span title="Special Occasion">🎉</span>{/if}
-                  {#if !meal.isTested}<span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">🧪</span>{/if}
-                </div>
-              </div>
-
-              {#if meal.description}
-                <p class="text-sm mt-1 line-clamp-2" style="color: var(--color-text-muted)" class:pl-2={!!meal.proteinType}>{meal.description}</p>
-              {/if}
-
-              <div class="flex items-center gap-2 mt-2 flex-wrap" class:pl-2={!!meal.proteinType}>
-                <span class="text-xs" style="color: var(--color-text-muted)">⏱ {meal.prepTimeMinutes + meal.cookTimeMinutes}m</span>
-                <span class="text-xs px-2 py-0.5 rounded {DIFFICULTY_COLORS[meal.difficulty]}">{meal.difficulty}</span>
-                {#if meal.leftoverBehaviour !== 'consumed_same'}
-                  <span class="text-xs" title={LEFTOVER_LABELS[meal.leftoverBehaviour]}>{meal.leftoverBehaviour === 'freezable' ? '❄️' : '🥡'}</span>
-                {/if}
-                {#if meal.cost != null}
-                  <span class="text-xs" style="color: var(--color-text-muted)">R{meal.cost.toFixed(0)}</span>
-                {/if}
-                {#each (meal.dietaryTypes || []).slice(0, 3) as dt}
-                  <span class="text-xs" style="color: var(--color-text-muted)">{dt.icon ?? ''}</span>
-                {/each}
-              </div>
-            </a>
+            <MealCard {meal} href="/meals/{meal.id}" />
           {/if}
         {/each}
       </div>

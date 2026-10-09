@@ -5,8 +5,9 @@ import { aggregateShoppingList } from '../lib/shopping';
 import { sqliteNow } from '../lib/sqlite';
 import { eq, and, between, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client';
-import { mealPlans, meals, mealIngredients, ingredients, ingredientCategories, users, weeklyRules, userSettings, familyMembers, familyMemberDietaryTypes } from '../db/schema';
-import { requireAuth, type AuthRequest } from '../middleware/auth';
+import { mealPlans, meals, mealIngredients, ingredients, ingredientCategories, users, weeklyRules, userSettings, mealSuitableFor, mealPreferredBy } from '../db/schema';
+import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/auth';
+import { generatePlan } from '../lib/generator';
 import { z } from 'zod';
 
 export const plannerRouter = createRouter();
@@ -54,6 +55,7 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
       categoryId: ingredientCategories.id,
       categoryName: ingredientCategories.name,
       categorySortOrder: ingredientCategories.sortOrder,
+      categoryHidden: ingredientCategories.hiddenFromShopping,
     })
     .from(mealIngredients)
     .innerJoin(ingredients, eq(mealIngredients.ingredientId, ingredients.id))
@@ -155,9 +157,9 @@ plannerRouter.get('/rules', async (_req: AuthRequest, res: Response): Promise<vo
   res.json(rules);
 });
 
-// ─── PATCH /api/planner/rules/:id ─────────────────────────────────────────────
+// ─── PATCH /api/planner/rules/:id (admin) ─────────────────────────────────────
 
-plannerRouter.patch('/rules/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+plannerRouter.patch('/rules/:id', requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
   const id = parseId(req.params.id, res);
   if (id === null) return;
   const schema = z.object({
@@ -167,6 +169,7 @@ plannerRouter.patch('/rules/:id', async (req: AuthRequest, res: Response): Promi
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  if (Object.keys(parsed.data).length === 0) { res.status(400).json({ error: 'Nothing to update' }); return; }
 
   const [updated] = await db.update(weeklyRules).set(parsed.data).where(eq(weeklyRules.id, id)).returning();
   if (!updated) { res.status(404).json({ error: 'Rule not found' }); return; }
@@ -175,19 +178,24 @@ plannerRouter.patch('/rules/:id', async (req: AuthRequest, res: Response): Promi
 
 // ─── GET /api/planner/settings ────────────────────────────────────────────────
 
-plannerRouter.get('/settings', async (_req: AuthRequest, res: Response): Promise<void> => {
+async function readSettings(): Promise<{ monthlyBudget: number | null; batchCookingDay: number }> {
   const rows = await db.select().from(userSettings);
   const settings: Record<string, string> = {};
   for (const row of rows) settings[row.key] = row.value;
-  res.json({
-    monthlyBudget: settings['monthly_budget'] ? parseFloat(settings['monthly_budget']) : null,
-    batchCookingDay: settings['batch_cooking_day'] ? parseInt(settings['batch_cooking_day']) : 0,
-  });
+  const budget = settings['monthly_budget'] ? parseFloat(settings['monthly_budget']) : NaN;
+  return {
+    monthlyBudget: Number.isFinite(budget) ? budget : null,
+    batchCookingDay: settings['batch_cooking_day'] ? parseInt(settings['batch_cooking_day'], 10) : 0,
+  };
+}
+
+plannerRouter.get('/settings', async (_req: AuthRequest, res: Response): Promise<void> => {
+  res.json(await readSettings());
 });
 
-// ─── PATCH /api/planner/settings ──────────────────────────────────────────────
+// ─── PATCH /api/planner/settings (admin) ──────────────────────────────────────
 
-plannerRouter.patch('/settings', async (req: AuthRequest, res: Response): Promise<void> => {
+plannerRouter.patch('/settings', requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
   const schema = z.object({
     monthlyBudget: z.number().min(0).nullable().optional(),
     batchCookingDay: z.number().int().min(0).max(6).optional(),
@@ -195,14 +203,8 @@ plannerRouter.patch('/settings', async (req: AuthRequest, res: Response): Promis
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  const upsert = async (key: string, value: string) => {
-    const existing = await db.select().from(userSettings).where(eq(userSettings.key, key)).limit(1);
-    if (existing.length > 0) {
-      await db.update(userSettings).set({ value }).where(eq(userSettings.key, key));
-    } else {
-      await db.insert(userSettings).values({ key, value });
-    }
-  };
+  const upsert = (key: string, value: string) =>
+    db.insert(userSettings).values({ key, value }).onConflictDoUpdate({ target: userSettings.key, set: { value } });
 
   if (parsed.data.monthlyBudget !== undefined) {
     await upsert('monthly_budget', parsed.data.monthlyBudget === null ? '' : String(parsed.data.monthlyBudget));
@@ -214,8 +216,48 @@ plannerRouter.patch('/settings', async (req: AuthRequest, res: Response): Promis
   res.json({ ok: true });
 });
 
+// ─── GET /api/planner/cost-summary?weekStart=YYYY-MM-DD ───────────────────────
+// Estimated spend for the week and for the calendar month the week starts in, against the monthly budget.
+
+plannerRouter.get('/cost-summary', async (req: AuthRequest, res: Response): Promise<void> => {
+  const weekStart = req.query.weekStart;
+  if (typeof weekStart !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
+    res.status(400).json({ error: 'weekStart query param required (YYYY-MM-DD)' });
+    return;
+  }
+  const [year, month, day] = weekStart.split('-').map(Number);
+  const weekEnd = new Date(Date.UTC(year, month - 1, day + 6)).toISOString().slice(0, 10);
+  const monthStart = `${weekStart.slice(0, 7)}-01`;
+  const monthEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+
+  const costBetween = async (from: string, to: string) => {
+    const rows = await db
+      .select({ cost: meals.cost })
+      .from(mealPlans)
+      .innerJoin(meals, eq(mealPlans.mealId, meals.id))
+      .where(between(mealPlans.planDate, from, to));
+    return {
+      total: Math.round(rows.reduce((sum, r) => sum + (r.cost ?? 0), 0) * 100) / 100,
+      mealsWithoutCost: rows.filter((r) => r.cost === null).length,
+    };
+  };
+
+  const [week, monthTotals, settings] = await Promise.all([
+    costBetween(weekStart, weekEnd),
+    costBetween(monthStart, monthEnd),
+    readSettings(),
+  ]);
+
+  res.json({
+    weekCost: week.total,
+    monthCost: monthTotals.total,
+    monthlyBudget: settings.monthlyBudget,
+    mealsWithoutCost: week.mealsWithoutCost,
+  });
+});
+
 // ─── POST /api/planner/auto-generate ──────────────────────────────────────────
-// Suggests meals for the week based on rules, constraints, and the recipe library
+// Suggests meals for the requested slots from the recipe library (see lib/generator.ts for the rules).
 
 plannerRouter.post('/auto-generate', async (req: AuthRequest, res: Response): Promise<void> => {
   const daySchema = z.object({
@@ -227,104 +269,89 @@ plannerRouter.post('/auto-generate', async (req: AuthRequest, res: Response): Pr
   });
 
   const bodySchema = z.object({
-    days: z.array(daySchema).min(1),
+    days: z.array(daySchema).min(1).max(100),
     overwriteExisting: z.boolean().default(false),
   });
 
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  // Load enabled rules
-  const rules = await db.select().from(weeklyRules).where(eq(weeklyRules.isEnabled, true));
-
-  // Load all meals
-  const allMeals = await db.select().from(meals);
+  const [rules, allMeals, suitableRows, preferredRows, settings] = await Promise.all([
+    db.select().from(weeklyRules).where(eq(weeklyRules.isEnabled, true)),
+    db.select().from(meals),
+    db.select().from(mealSuitableFor),
+    db.select().from(mealPreferredBy),
+    readSettings(),
+  ]);
   if (allMeals.length === 0) { res.status(422).json({ error: 'No meals in library' }); return; }
 
-  // Build rule maps
   const proteinLimits: Record<string, number> = {};
   const categoryLimits: Record<string, number> = {};
   let defaultLeftoversDays: number[] = [0, 1, 2, 3, 4]; // Sun–Thu
-
+  let ruleBatchDay: number | null = null;
   for (const rule of rules) {
     try {
       const val = JSON.parse(rule.value);
       if (rule.ruleType === 'max_protein_per_week' && val.protein) proteinLimits[val.protein] = val.maxCount ?? 1;
       if (rule.ruleType === 'max_category_per_week' && val.category) categoryLimits[val.category] = val.maxCount ?? 3;
       if (rule.ruleType === 'default_leftovers_days' && Array.isArray(val.days)) defaultLeftoversDays = val.days;
+      if (rule.ruleType === 'batch_cooking_day' && Number.isInteger(val.dayOfWeek)) ruleBatchDay = val.dayOfWeek;
     } catch { /* skip malformed rule */ }
   }
+  const batchRuleEnabled = rules.some((r) => r.ruleType === 'batch_cooking_day');
 
-  // Track weekly usage for variety scoring (soft, not hard constraint)
-  const proteinUsed: Record<string, number> = {};
-  const categoryUsed: Record<string, number> = {};
-  const suggestions: { date: string; slot: string; mealId: number | null; notes: string | null }[] = [];
+  const dates = parsed.data.days.map((d) => d.date).sort();
+  const existing = await db
+    .select({ date: mealPlans.planDate, slot: mealPlans.mealSlot, mealId: mealPlans.mealId })
+    .from(mealPlans)
+    .where(between(mealPlans.planDate, dates[0], dates[dates.length - 1]));
 
-  for (const day of parsed.data.days) {
-    const [dayYear, dayMonth, dayDate] = day.date.split('-').map(Number);
-    const dayOfWeek = new Date(Date.UTC(dayYear, dayMonth - 1, dayDate)).getUTCDay();
-    const leftoversNeeded = day.leftoversRequired ?? defaultLeftoversDays.includes(dayOfWeek);
+  const generated = generatePlan({
+    days: parsed.data.days,
+    meals: allMeals.map((m) => ({
+      id: m.id,
+      prepTimeMinutes: m.prepTimeMinutes,
+      cookTimeMinutes: m.cookTimeMinutes,
+      proteinType: m.proteinType,
+      mealCategory: m.mealCategory,
+      leftoverBehaviour: m.leftoverBehaviour,
+      isFavourite: m.isFavourite,
+      isSpecialOccasion: m.isSpecialOccasion,
+      suitableForMemberIds: suitableRows.filter((r) => r.mealId === m.id).map((r) => r.familyMemberId),
+      preferredByMemberIds: preferredRows.filter((r) => r.mealId === m.id).map((r) => r.familyMemberId),
+    })),
+    rules: {
+      proteinLimits,
+      categoryLimits,
+      defaultLeftoversDays,
+      batchCookingDay: batchRuleEnabled ? (settings.batchCookingDay ?? ruleBatchDay) : null,
+    },
+    existing,
+    overwriteExisting: parsed.data.overwriteExisting,
+  });
 
-    // Base candidates: filter on hard constraints only (prep time limit, protein/category weekly caps)
-    let candidates = allMeals.filter((m) => {
-      // Prep time limit (hard constraint)
-      if (day.prepTimeLimitMinutes && (m.prepTimeMinutes + m.cookTimeMinutes) > day.prepTimeLimitMinutes) return false;
-      // Protein limit (hard constraint)
-      if (m.proteinType && proteinLimits[m.proteinType] !== undefined) {
-        if ((proteinUsed[m.proteinType] ?? 0) >= proteinLimits[m.proteinType]) return false;
-      }
-      // Category limit (hard constraint)
-      if (m.mealCategory && categoryLimits[m.mealCategory] !== undefined) {
-        if ((categoryUsed[m.mealCategory] ?? 0) >= categoryLimits[m.mealCategory]) return false;
-      }
-      return true;
-    });
-
-    // No default slot-category filter. Keep the full candidate pool unless the user
-    // explicitly adds preferences.
-
-    // Shuffle for variety and pick
-    candidates.sort(() => Math.random() - 0.5);
-    const pick = candidates[0] ?? null;
-
-    if (pick) {
-      if (pick.proteinType) proteinUsed[pick.proteinType] = (proteinUsed[pick.proteinType] ?? 0) + 1;
-      if (pick.mealCategory) categoryUsed[pick.mealCategory] = (categoryUsed[pick.mealCategory] ?? 0) + 1;
-    }
-
-    suggestions.push({ date: day.date, slot: day.slot, mealId: pick?.id ?? null, notes: null });
-  }
-
-  // Write to planner
-  for (const s of suggestions) {
-    const existing = await db.select({ id: mealPlans.id, mealId: mealPlans.mealId })
-      .from(mealPlans)
-      .where(and(eq(mealPlans.planDate, s.date), eq(mealPlans.mealSlot, s.slot as any)))
-      .limit(1);
-
-    if (existing.length > 0) {
-      const current = existing[0];
-      const shouldUpdate = parsed.data.overwriteExisting || current.mealId === null;
-
-      if (shouldUpdate) {
-        await db
-          .update(mealPlans)
-          .set({
-            mealId: s.mealId,
-            assignedByUserId: req.user!.userId,
-            updatedAt: sqliteNow(),
-          })
-          .where(eq(mealPlans.id, current.id));
-      }
-    } else {
-      await db.insert(mealPlans).values({
-        planDate: s.date,
-        mealSlot: s.slot as any,
+  // Slots where nothing suitable was found are left as they were: a failed pick never wipes an existing meal.
+  const toWrite = generated.filter((s) => s.mealId !== null);
+  const servingsByMeal = new Map(allMeals.map((m) => [m.id, m.servings]));
+  await db.transaction(async (tx) => {
+    for (const s of toWrite) {
+      const values = {
         mealId: s.mealId,
+        servings: servingsByMeal.get(s.mealId!) ?? 2,
+        leftoversRequired: s.leftoversRequired,
+        prepTimeLimitMinutes: s.prepTimeLimitMinutes,
         assignedByUserId: req.user!.userId,
-      });
+      };
+      await tx
+        .insert(mealPlans)
+        .values({ planDate: s.date, mealSlot: s.slot, ...values })
+        .onConflictDoUpdate({ target: [mealPlans.planDate, mealPlans.mealSlot], set: { ...values, updatedAt: sqliteNow() } });
     }
-  }
+  });
 
-  res.json({ generated: suggestions.length, suggestions });
+  res.json({
+    generated: toWrite.length,
+    unfilled: generated.length - toWrite.length,
+    suggestions: generated.map((s) => ({ date: s.date, slot: s.slot, mealId: s.mealId, notes: null })),
+  });
 });

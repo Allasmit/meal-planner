@@ -9,6 +9,8 @@ export interface ShoppingRow {
   categoryId: number | null;
   categoryName: string | null;
   categorySortOrder: number | null;
+  /** Category is hidden from the shopping list unless the user asks to see everything. */
+  categoryHidden?: boolean | null;
 }
 
 export interface ShoppingCategory {
@@ -17,16 +19,6 @@ export interface ShoppingCategory {
   sortOrder: number;
   items: { ingredientId: number; name: string; quantity: number; unit: string }[];
 }
-
-export const HIDDEN_CATEGORY_NAMES = new Set([
-  'Spices & Herbs',
-  'Condiments & Sauces',
-  'Pantry & Dry Goods',
-  'Canned & Jarred',
-  'Beverages',
-  'Frozen',
-  'Other',
-]);
 
 /**
  * Builds the grouped shopping list. `mealCounts` is how many times each meal is planned in the
@@ -44,7 +36,7 @@ export function aggregateShoppingList(
   >();
 
   for (const row of rows) {
-    if (!showHidden && row.categoryName && HIDDEN_CATEGORY_NAMES.has(row.categoryName)) continue;
+    if (!showHidden && row.categoryHidden) continue;
 
     const count = mealCounts.get(row.mealId) ?? 0;
     if (count === 0) continue;

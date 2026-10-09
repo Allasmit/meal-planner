@@ -10,6 +10,9 @@ import { plannerRouter } from './routes/planner';
 import { importRouter } from './routes/import';
 import { familyRouter } from './routes/family';
 import { runMigrations } from './db/migrate';
+import { imagesRouter } from './routes/images';
+import { migrateInlineImages, removeOrphanedImages } from './lib/images';
+import { backupDatabase, pruneBackups, startScheduledBackups } from './lib/backup';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -38,6 +41,7 @@ app.use('/api/meals', mealsRouter);
 app.use('/api/planner', plannerRouter);
 app.use('/api/import', importRouter);
 app.use('/api/family', familyRouter);
+app.use('/api/images', imagesRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -76,10 +80,20 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 
 // Migrations must finish before the server accepts requests.
 runMigrations()
-  .then(() => {
+  .then(async () => {
+    // Older versions stored photos inline in the database; move them to files once (backing up first).
+    const moved = await migrateInlineImages(async () => {
+      console.log(`Database backed up to ${await backupDatabase('mealplan-pre-images')}`);
+      pruneBackups('mealplan-pre-images', 3);
+    });
+    if (moved > 0) console.log(`Moved ${moved} inline meal image(s) to files.`);
+    const orphans = await removeOrphanedImages();
+    if (orphans > 0) console.log(`Removed ${orphans} unused image file(s).`);
+
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`API server running on http://0.0.0.0:${PORT}`);
     });
+    startScheduledBackups();
   })
   .catch((err) => {
     console.error('Migration failed:', err);
