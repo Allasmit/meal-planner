@@ -4,6 +4,7 @@ import {
   integer,
   real,
   uniqueIndex,
+  index,
 } from 'drizzle-orm/sqlite-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -124,7 +125,7 @@ export const mealPlans = sqliteTable(
     assignedByUserId: integer('assigned_by_user_id').references(() => users.id),
     updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
   },
-  (t) => [uniqueIndex('meal_plan_slot_unique').on(t.planDate, t.mealSlot)],
+  (t) => [index('idx_meal_plans_slot').on(t.planDate, t.mealSlot)],
 );
 
 // ─── User / Household Settings ────────────────────────────────────────────────

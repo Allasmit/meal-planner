@@ -16,38 +16,49 @@ async function findCachedMeal(mealId: number): Promise<any | undefined> {
   return found;
 }
 
-async function patchPlannerSlot(method: string, planDate: string, mealSlot: string, body: any) {
+/** Optimistic update of the cached week plans for the three planner mutations:
+ * POST /planner/:date/:slot (add a dish), PUT /planner/entry/:id (move/edit) and DELETE /planner/entry/:id. */
+async function patchPlannerEntries(method: string, target: { date?: string; slot?: string; id?: number }, body: any, tempId?: number) {
+  const meal = body?.mealId ? await findCachedMeal(body.mealId) : undefined;
+  const denormalize = (base: any) => ({
+    ...base,
+    ...(meal && {
+      mealName: meal.name,
+      mealPrepTime: meal.prepTimeMinutes ?? null,
+      mealCookTime: meal.cookTimeMinutes ?? null,
+      mealDifficulty: meal.difficulty ?? null,
+    }),
+  });
+
   await forEachCachedGet('/planner?', async (data) => {
     if (!Array.isArray(data)) return undefined;
-    const idx = data.findIndex((p: any) => p.planDate === planDate && p.mealSlot === mealSlot);
 
-    if (method === 'DELETE') {
-      if (idx === -1) return undefined;
-      const next = data.slice();
-      next.splice(idx, 1);
-      return next;
+    if (method === 'POST') {
+      return [
+        ...data,
+        denormalize({
+          id: tempId ?? -Date.now(),
+          planDate: target.date,
+          mealSlot: target.slot,
+          mealId: body?.mealId ?? null,
+          servings: body?.servings ?? meal?.servings ?? 1,
+          notes: body?.notes ?? null,
+          assignedByUserId: null,
+          mealName: null,
+          mealPrepTime: null,
+          mealCookTime: null,
+          mealDifficulty: null,
+          assignedByDisplayName: null,
+          _pendingSync: true,
+        }),
+      ];
     }
 
-    const existing = idx >= 0 ? data[idx] : undefined;
-    const meal = body?.mealId ? await findCachedMeal(body.mealId) : undefined;
-    const entry = {
-      id: existing?.id ?? -Date.now(),
-      planDate,
-      mealSlot,
-      mealId: body?.mealId ?? null,
-      servings: body?.servings ?? meal?.servings ?? existing?.servings ?? 1,
-      notes: body?.notes ?? existing?.notes ?? null,
-      assignedByUserId: existing?.assignedByUserId ?? null,
-      mealName: meal?.name ?? existing?.mealName ?? null,
-      mealPrepTime: meal?.prepTimeMinutes ?? existing?.mealPrepTime ?? null,
-      mealCookTime: meal?.cookTimeMinutes ?? existing?.mealCookTime ?? null,
-      mealDifficulty: meal?.difficulty ?? existing?.mealDifficulty ?? null,
-      assignedByDisplayName: existing?.assignedByDisplayName ?? null,
-      _pendingSync: true,
-    };
+    const idx = data.findIndex((p: any) => p.id === target.id);
+    if (idx === -1) return undefined;
     const next = data.slice();
-    if (idx >= 0) next[idx] = entry;
-    else next.push(entry);
+    if (method === 'DELETE') next.splice(idx, 1);
+    else next[idx] = denormalize({ ...next[idx], ...body, _pendingSync: true });
     return next;
   });
 }
@@ -107,9 +118,14 @@ async function patchEntityCollections(basePath: string, method: string, id: numb
 export async function applyOptimisticPatch(method: string, path: string, bodyRaw?: string, tempId?: number): Promise<void> {
   const body = bodyRaw ? JSON.parse(bodyRaw) : undefined;
 
-  const plannerMatch = path.match(/^\/planner\/(\d{4}-\d{2}-\d{2})\/(\w+)$/);
-  if (plannerMatch) {
-    await patchPlannerSlot(method, plannerMatch[1], plannerMatch[2], body);
+  const plannerAdd = path.match(/^\/planner\/(\d{4}-\d{2}-\d{2})\/(\w+)$/);
+  if (plannerAdd && method === 'POST') {
+    await patchPlannerEntries(method, { date: plannerAdd[1], slot: plannerAdd[2] }, body, tempId);
+    return;
+  }
+  const plannerEntry = path.match(/^\/planner\/entry\/(-?\d+)$/);
+  if (plannerEntry) {
+    await patchPlannerEntries(method, { id: Number(plannerEntry[1]) }, body);
     return;
   }
 

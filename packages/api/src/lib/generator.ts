@@ -80,7 +80,7 @@ export function generatePlan(input: GenerateInput): Suggestion[] {
   const { rules } = input;
   const mealById = new Map(input.meals.map((m) => [m.id, m]));
 
-  const existingBySlot = new Map(input.existing.map((p) => [`${p.date}::${p.slot}`, p]));
+  const existingBySlot = new Map(input.existing.filter((p) => p.mealId !== null).map((p) => [`${p.date}::${p.slot}`, p]));
   const days = [...input.days].sort(
     (a, b) => a.date.localeCompare(b.date) || SLOT_ORDER.indexOf(a.slot) - SLOT_ORDER.indexOf(b.slot),
   );

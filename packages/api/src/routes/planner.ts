@@ -103,16 +103,18 @@ plannerRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =>
   res.json(result);
 });
 
-// PUT /api/planner/:date/:slot
-plannerRouter.put('/:date/:slot', async (req: AuthRequest, res: Response): Promise<void> => {
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const VALID_SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
+
+// POST /api/planner/:date/:slot — add a dish to a slot (a slot can hold several)
+plannerRouter.post('/:date/:slot', async (req: AuthRequest, res: Response): Promise<void> => {
   const { date, slot } = req.params;
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { res.status(400).json({ error: 'Invalid date format' }); return; }
-  const VALID_SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'];
-  if (!VALID_SLOTS.includes(slot)) { res.status(400).json({ error: 'Invalid meal slot' }); return; }
+  if (!DATE_RE.test(date)) { res.status(400).json({ error: 'Invalid date format' }); return; }
+  if (!(VALID_SLOTS as readonly string[]).includes(slot)) { res.status(400).json({ error: 'Invalid meal slot' }); return; }
 
   const schema = z.object({
-    mealId: z.number().int().nullable(),
+    mealId: z.number().int(),
     servings: z.number().int().min(1).default(2),
     notes: z.string().optional().nullable(),
   });
@@ -120,33 +122,54 @@ plannerRouter.put('/:date/:slot', async (req: AuthRequest, res: Response): Promi
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  // Single atomic upsert on the unique (date, slot) index, so two quick requests can't collide.
-  const slotValues = {
-    mealId: parsed.data.mealId,
-    servings: parsed.data.servings,
-    notes: parsed.data.notes,
-    assignedByUserId: req.user!.userId,
-  };
+  const [meal] = await db.select({ id: meals.id }).from(meals).where(eq(meals.id, parsed.data.mealId));
+  if (!meal) { res.status(404).json({ error: 'Meal not found' }); return; }
+
   const [saved] = await db
     .insert(mealPlans)
-    .values({ planDate: date, mealSlot: slot as any, ...slotValues })
-    .onConflictDoUpdate({
-      target: [mealPlans.planDate, mealPlans.mealSlot],
-      set: { ...slotValues, updatedAt: sqliteNow() },
+    .values({
+      planDate: date,
+      mealSlot: slot as (typeof VALID_SLOTS)[number],
+      mealId: parsed.data.mealId,
+      servings: parsed.data.servings,
+      notes: parsed.data.notes,
+      assignedByUserId: req.user!.userId,
     })
     .returning();
-  res.json(saved);
+  res.status(201).json(saved);
 });
 
-// DELETE /api/planner/:date/:slot
-plannerRouter.delete('/:date/:slot', async (req: AuthRequest, res: Response): Promise<void> => {
-  const { date, slot } = req.params;
-  const result = await db
-    .delete(mealPlans)
-    .where(and(eq(mealPlans.planDate, date), eq(mealPlans.mealSlot, slot as any)))
-    .returning({ id: mealPlans.id });
+// PUT /api/planner/entry/:id — change a planned dish: move it to another date/slot, swap the meal, or edit servings/notes
+plannerRouter.put('/entry/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
 
-  if (result.length === 0) { res.status(404).json({ error: 'No plan found for that date/slot' }); return; }
+  const schema = z.object({
+    planDate: z.string().regex(DATE_RE).optional(),
+    mealSlot: z.enum(VALID_SLOTS).optional(),
+    mealId: z.number().int().optional(),
+    servings: z.number().int().min(1).optional(),
+    notes: z.string().optional().nullable(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  if (Object.keys(parsed.data).length === 0) { res.status(400).json({ error: 'Nothing to update' }); return; }
+
+  const [updated] = await db
+    .update(mealPlans)
+    .set({ ...parsed.data, assignedByUserId: req.user!.userId, updatedAt: sqliteNow() })
+    .where(eq(mealPlans.id, id))
+    .returning();
+  if (!updated) { res.status(404).json({ error: 'Planned meal not found' }); return; }
+  res.json(updated);
+});
+
+// DELETE /api/planner/entry/:id — remove one dish from the plan
+plannerRouter.delete('/entry/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = parseId(req.params.id, res);
+  if (id === null) return;
+  const result = await db.delete(mealPlans).where(eq(mealPlans.id, id)).returning({ id: mealPlans.id });
+  if (result.length === 0) { res.status(404).json({ error: 'Planned meal not found' }); return; }
   res.json({ ok: true });
 });
 
@@ -342,10 +365,9 @@ plannerRouter.post('/auto-generate', async (req: AuthRequest, res: Response): Pr
         prepTimeLimitMinutes: s.prepTimeLimitMinutes,
         assignedByUserId: req.user!.userId,
       };
-      await tx
-        .insert(mealPlans)
-        .values({ planDate: s.date, mealSlot: s.slot, ...values })
-        .onConflictDoUpdate({ target: [mealPlans.planDate, mealPlans.mealSlot], set: { ...values, updatedAt: sqliteNow() } });
+      // Only empty slots (or slots being overwritten) reach here, so clear whatever is left before adding the pick.
+      await tx.delete(mealPlans).where(and(eq(mealPlans.planDate, s.date), eq(mealPlans.mealSlot, s.slot)));
+      await tx.insert(mealPlans).values({ planDate: s.date, mealSlot: s.slot, ...values });
     }
   });
 
