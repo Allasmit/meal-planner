@@ -16,7 +16,7 @@
   type="button"
   {onclick}
   aria-pressed={active}
-  class="text-xs px-3 py-1.5 rounded-full border transition-colors"
+  class="text-xs font-medium px-3.5 py-1.5 rounded-full border transition-all"
   style={active ? `background: ${color}; color: white; border-color: ${color};` : 'border-color: var(--color-border); color: var(--color-text-muted);'}
 >
   {@render children()}

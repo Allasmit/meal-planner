@@ -18,12 +18,12 @@
   this={href ? 'a' : 'button'}
   {...href ? { href } : { type: 'button' }}
   onclick={href ? undefined : () => onselect?.(meal)}
-  class="rounded-xl shadow-sm p-4 hover:shadow-md transition-shadow block relative overflow-hidden {href ? '' : 'text-left w-full'}"
+  class="rounded-xl shadow-sm p-4 hover:shadow-md transition-all duration-200 group block relative overflow-hidden {href ? '' : 'text-left w-full'}"
   style="background: var(--color-surface); border: 1px solid var(--color-border)"
 >
   {#if meal.imageUrl}
     <div class="mb-3 -mx-4 -mt-4 overflow-hidden rounded-t-xl">
-      <img src={meal.imageUrl} alt={meal.name} class="h-40 w-full object-cover block" loading="lazy" />
+      <img src={meal.imageUrl} alt={meal.name} class="h-40 w-full object-cover block transition-transform duration-300 group-hover:scale-105" loading="lazy" />
     </div>
   {/if}
 
@@ -36,7 +36,7 @@
     <div class="flex items-center gap-1 shrink-0">
       {#if meal.isFavourite}<span title="Favourite" role="img" aria-label="Favourite">⭐</span>{/if}
       {#if meal.isSpecialOccasion}<span title="Special Occasion" role="img" aria-label="Special occasion">🎉</span>{/if}
-      {#if !meal.isTested}<span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700" title="Not tested yet" role="img" aria-label="Not tested yet">🧪</span>{/if}
+      {#if !meal.isTested}<span class="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700" title="Not tested yet" role="img" aria-label="Not tested yet">🧪</span>{/if}
     </div>
   </div>
 
@@ -46,7 +46,7 @@
 
   <div class="flex items-center gap-2 mt-2 flex-wrap" class:pl-2={!!meal.proteinType}>
     <span class="text-xs" style="color: var(--color-text-muted)">⏱ {meal.prepTimeMinutes + meal.cookTimeMinutes}m</span>
-    <span class="text-xs px-2 py-0.5 rounded {DIFFICULTY_COLORS[meal.difficulty]}">{meal.difficulty}</span>
+    <span class="text-xs font-medium px-2 py-0.5 rounded-full {DIFFICULTY_COLORS[meal.difficulty]}">{meal.difficulty}</span>
     {#if meal.leftoverBehaviour !== 'consumed_same'}
       <span class="text-xs" title={LEFTOVER_LABELS[meal.leftoverBehaviour]} role="img" aria-label={LEFTOVER_LABELS[meal.leftoverBehaviour]}>{meal.leftoverBehaviour === 'freezable' ? '❄️' : '🥡'}</span>
     {/if}

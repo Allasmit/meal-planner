@@ -68,12 +68,12 @@
 <div class="flex items-center gap-1 shrink-0">
   <span
     class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full"
-    style="background: {$syncStatus.online ? 'rgba(255,255,255,0.16)' : '#f59e0b'}; color: white;"
+    style="background: {$syncStatus.online ? 'var(--color-accent-light)' : '#f59e0b'}; color: {$syncStatus.online ? 'var(--color-accent-text)' : 'white'};"
     title="Last synced {lastSyncedLabel}"
   >
     <span
       class="w-2 h-2 rounded-full shrink-0"
-      style="background: {$syncStatus.online ? '#4ade80' : '#fff'}"
+      style="background: {$syncStatus.online ? 'var(--color-accent)' : '#fff'}"
     ></span>
     {#if !$syncStatus.online}
       Offline{#if $syncStatus.pending > 0}<span class="hidden sm:inline">&nbsp;· {$syncStatus.pending} pending</span>{/if}
@@ -96,7 +96,7 @@
     onclick={syncNow}
     disabled={$syncStatus.syncing}
     class="text-xs px-2 py-1 rounded-full transition-opacity disabled:opacity-60"
-    style="background: rgba(255,255,255,0.16); color: white;"
+    style="background: var(--color-accent-light); color: var(--color-accent-text);"
     title="Sync now"
     aria-label="Sync now"
   >

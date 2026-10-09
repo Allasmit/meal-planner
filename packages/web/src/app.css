@@ -4,43 +4,117 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ─── CSS custom properties for theming ─────────────────────────────────────── */
+/* Re-tint Tailwind's green scale to a fresher, slightly teal "herb" palette so
+   every existing green-* utility picks up the new brand colour. */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --color-green-50: #effaf4;
+  --color-green-100: #d8f3e4;
+  --color-green-200: #b3e6cb;
+  --color-green-300: #82d3ab;
+  --color-green-400: #4dba88;
+  --color-green-500: #25a06e;
+  --color-green-600: #12875c;
+  --color-green-700: #0f6c4b;
+  --color-green-800: #0f563d;
+  --color-green-900: #0d4633;
+  --radius-xl: 0.9rem;
+  --radius-2xl: 1.25rem;
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+  --shadow-md: 0 4px 12px -2px rgb(16 24 40 / 0.08), 0 2px 4px -2px rgb(16 24 40 / 0.05);
+  --shadow-lg: 0 12px 32px -8px rgb(16 24 40 / 0.16), 0 4px 8px -4px rgb(16 24 40 / 0.06);
+}
+
+/* ─── CSS custom properties for theming ─────────────────────────────────────── */
 :root {
-  --color-bg: #f9fafb;
+  --color-bg: #f6f8f7;
   --color-surface: #ffffff;
-  --color-border: #e5e7eb;
-  --color-text: #111827;
-  --color-text-muted: #6b7280;
-  --color-accent: #16a34a;
-  --color-accent-hover: #15803d;
-  --color-accent-light: #dcfce7;
-  --color-accent-text: #166534;
+  --color-border: #e4e9e6;
+  --color-text: #14201b;
+  --color-text-muted: #66756e;
+  --color-accent: #12875c;
+  --color-accent-hover: #0f6c4b;
+  --color-accent-light: #d8f3e4;
+  --color-accent-text: #0f563d;
   --color-danger: #dc2626;
   --color-danger-light: #fee2e2;
-  --color-nav-bg: #ffffff;
-  --color-header-bg: #15803d;
+  --color-nav-bg: rgb(255 255 255 / 0.82);
+  --color-header-bg: rgb(255 255 255 / 0.8);
+  --color-header-text: #14201b;
+  --color-ring: rgb(18 135 92 / 0.35);
 }
 
 .dark {
-  --color-bg: #0f172a;
-  --color-surface: #1e293b;
-  --color-border: #334155;
-  --color-text: #f1f5f9;
-  --color-text-muted: #94a3b8;
-  --color-accent: #22c55e;
-  --color-accent-hover: #16a34a;
-  --color-accent-light: #14532d;
-  --color-accent-text: #86efac;
+  --color-bg: #0c1311;
+  --color-surface: #151e1b;
+  --color-border: #26332e;
+  --color-text: #eaf1ee;
+  --color-text-muted: #8fa39a;
+  --color-accent: #3ecf8e;
+  --color-accent-hover: #2fb47a;
+  --color-accent-light: #123a2a;
+  --color-accent-text: #8fe6bd;
   --color-danger: #f87171;
-  --color-danger-light: #450a0a;
-  --color-nav-bg: #1e293b;
-  --color-header-bg: #14532d;
+  --color-danger-light: #3b1212;
+  --color-nav-bg: rgb(21 30 27 / 0.85);
+  --color-header-bg: rgb(12 19 17 / 0.8);
+  --color-header-text: #eaf1ee;
+  --color-ring: rgb(62 207 142 / 0.4);
 }
+
+html { -webkit-tap-highlight-color: transparent; }
 
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
   transition: background-color 0.2s, color 0.2s;
 }
+
+h1, h2, h3 { letter-spacing: -0.015em; }
+
+/* Smooth page entrance */
+main { animation: page-in 0.28s ease-out both; }
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  main { animation: none; }
+  * { transition-duration: 0.01ms !important; }
+}
+
+/* Consistent, accessible focus treatment */
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 3px var(--color-ring);
+}
+
+/* Softer, rounder form controls */
+input:not([type=checkbox]):not([type=radio]):not([type=range]),
+select,
+textarea {
+  border-radius: 0.7rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+/* Tactile buttons */
+button:not(:disabled), a[class*="bg-green-"] { transition: transform 0.12s, background-color 0.15s, box-shadow 0.15s, opacity 0.15s; }
+button:not(:disabled):active { transform: scale(0.97); }
+.bg-green-600, .bg-green-700 { box-shadow: 0 1px 2px rgb(16 24 40 / 0.1), inset 0 1px 0 rgb(255 255 255 / 0.12); }
+
+/* Cards lift gently on hover (pointer devices only) */
+@media (hover: hover) {
+  a.rounded-xl:hover, button.rounded-xl:hover { transform: translateY(-1px); }
+}
+
+::selection { background: var(--color-accent-light); color: var(--color-accent-text); }
+
+/* Slim scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }
 
 /* ─── Dark mode overrides for legacy Tailwind utilities ─────────────────────── */
 /* Covers components that still use hardcoded bg-white / text-gray-* classes    */
@@ -106,6 +180,7 @@ body {
     --color-danger-light: #fff;
     --color-nav-bg: #fff;
     --color-header-bg: #fff;
+    --color-header-text: #000;
   }
 
   a {

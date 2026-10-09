@@ -28,7 +28,7 @@ export default defineConfig({
 				name: 'Meal Planner',
 				short_name: 'Meals',
 				description: 'Weekly household meal planning app',
-				theme_color: '#16a34a',
+				theme_color: '#12875c',
 				background_color: '#ffffff',
 				display: 'standalone',
 				orientation: 'portrait',

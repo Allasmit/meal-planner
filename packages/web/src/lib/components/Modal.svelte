@@ -56,8 +56,15 @@
   }
 </script>
 
+<style>
+  .modal-backdrop { animation: fade-in 0.18s ease-out both; }
+  .modal-backdrop > :global([role='dialog']) { animation: pop-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+  @keyframes fade-in { from { opacity: 0; } }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
+</style>
+
 <div
-  class="fixed inset-0 z-50 flex bg-black/40 print:hidden {variant === 'sheet' ? 'flex-col justify-end' : 'items-end sm:items-center justify-center p-4'}"
+  class="fixed inset-0 z-50 flex bg-black/50 backdrop-blur-sm print:hidden modal-backdrop {variant === 'sheet' ? 'flex-col justify-end' : 'items-end sm:items-center justify-center p-4'}"
   onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
   onkeydown={onkeydown}
   role="presentation"
