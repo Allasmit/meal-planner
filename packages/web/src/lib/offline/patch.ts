@@ -136,7 +136,18 @@ async function patchEntityCollections(basePath: string, method: string, id: numb
  * This intentionally only understands a handful of endpoint shapes; anything
  * else is simply queued without a local cache update.
  */
-export async function applyOptimisticPatch(method: string, path: string, bodyRaw?: string, tempId?: number): Promise<void> {
+export function applyOptimisticPatch(method: string, path: string, bodyRaw?: string, tempId?: number): Promise<void> {
+  // Each patch reads a cached list, changes it and writes it back, so patches made at the same time
+  // (e.g. "Clear week" removing a dozen dishes at once) must run one after another - otherwise they
+  // overwrite each other's result and only some of the changes show.
+  const run = patchQueue.then(() => patchNow(method, path, bodyRaw, tempId));
+  patchQueue = run.catch(() => {});
+  return run;
+}
+
+let patchQueue: Promise<void> = Promise.resolve();
+
+async function patchNow(method: string, path: string, bodyRaw?: string, tempId?: number): Promise<void> {
   const body = bodyRaw ? JSON.parse(bodyRaw) : undefined;
 
   const plannerAdd = path.match(/^\/planner\/(\d{4}-\d{2}-\d{2})\/(\w+)$/);

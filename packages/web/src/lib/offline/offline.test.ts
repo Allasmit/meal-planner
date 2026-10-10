@@ -194,3 +194,14 @@ describe('applyOptimisticPatch', () => {
 		expect((await getCachedGet<any[]>('/planner?weekStart=2026-10-12'))![0]).toMatchObject({ id: -900, planDate: '2026-10-13', customName: 'Pizza' });
 	});
 });
+
+describe('clearing a week offline', () => {
+	it('removes every entry from the cached week when the deletes are queued at the same time', async () => {
+		const entries = Array.from({ length: 12 }, (_, i) => ({ id: i + 1, planDate: '2026-10-05', mealSlot: 'dinner', mealId: i }));
+		await setCachedGet('/planner?weekStart=2026-10-05', entries);
+
+		await Promise.all(entries.map((e) => applyOptimisticPatch('DELETE', `/planner/entry/${e.id}`)));
+
+		expect(await getCachedGet<any[]>('/planner?weekStart=2026-10-05')).toEqual([]);
+	});
+});
