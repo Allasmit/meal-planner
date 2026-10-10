@@ -71,7 +71,7 @@
     return list.map((cat) => {
       const items = cat.items
         .filter((i) => !checked.has(`${cat.categoryId}::${i.ingredientId}::${i.unit}`))
-        .map((i) => `  • ${i.quantity} ${i.unit} ${i.name}`)
+        .map((i) => i.custom ? `  • ${i.name}` : `  • ${i.quantity} ${i.unit} ${i.name}`)
         .join('\n');
       return items ? `${cat.categoryName}:\n${items}` : '';
     }).filter(Boolean).join('\n\n');
@@ -177,7 +177,7 @@
                 {#if checked.has(key)}<span class="text-xs leading-none">✓</span>{/if}
               </button>
               <span class="flex-1 text-sm" style="color: {checked.has(key) ? 'var(--color-text-muted)' : 'var(--color-text)'}; text-decoration: {checked.has(key) ? 'line-through' : 'none'}">{item.name}</span>
-              <span class="text-sm font-medium" style="color: {checked.has(key) ? 'var(--color-border)' : 'var(--color-text-muted)'}">{item.quantity} {item.unit}</span>
+              {#if !item.custom}<span class="text-sm font-medium" style="color: {checked.has(key) ? 'var(--color-border)' : 'var(--color-text-muted)'}">{item.quantity} {item.unit}</span>{/if}
             </li>
           {/each}
         </ul>

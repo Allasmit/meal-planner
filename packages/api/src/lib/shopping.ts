@@ -17,7 +17,7 @@ export interface ShoppingCategory {
   categoryId: number | null;
   categoryName: string;
   sortOrder: number;
-  items: { ingredientId: number; name: string; quantity: number; unit: string }[];
+  items: { ingredientId: number; name: string; quantity: number; unit: string; custom?: boolean }[];
 }
 
 /**

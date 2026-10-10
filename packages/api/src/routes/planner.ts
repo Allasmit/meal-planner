@@ -1,7 +1,7 @@
 ﻿import type { Response } from 'express';
 import { createRouter } from '../lib/router';
 import { parseId } from '../lib/params';
-import { aggregateShoppingList } from '../lib/shopping';
+import { aggregateShoppingList, type ShoppingCategory } from '../lib/shopping';
 import { sqliteNow } from '../lib/sqlite';
 import { eq, and, between, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client';
@@ -13,6 +13,20 @@ import { z } from 'zod';
 export const plannerRouter = createRouter();
 
 plannerRouter.use(requireAuth);
+
+function withCustomDishes(categories: ShoppingCategory[], dishes: { id: number; name: string }[]): ShoppingCategory[] {
+  if (dishes.length === 0) return categories;
+  return [
+    ...categories,
+    {
+      categoryId: null,
+      categoryName: 'Own dishes',
+      sortOrder: 1000,
+      // Negative id keeps the tick key unique and distinct from real ingredients.
+      items: dishes.map((d) => ({ ingredientId: -d.id, name: d.name, quantity: 0, unit: '', custom: true })),
+    },
+  ];
+}
 
 // GET /api/planner/shopping-list — must be before /:date/:slot to avoid param collision
 plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -30,13 +44,19 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
     .slice(0, 10);
 
   const plans = await db
-    .select({ mealId: mealPlans.mealId, servings: mealPlans.servings })
+    .select({ id: mealPlans.id, mealId: mealPlans.mealId, servings: mealPlans.servings, customName: mealPlans.customName })
     .from(mealPlans)
-    .where(between(mealPlans.planDate, weekStart, weekEnd));
+    .where(between(mealPlans.planDate, weekStart, weekEnd))
+    .orderBy(mealPlans.id);
+
+  // Own dishes have no ingredients: they go on the list exactly as they were entered.
+  const customDishes = plans
+    .filter((p) => p.mealId === null && p.customName?.trim())
+    .map((p) => ({ id: p.id, name: p.customName!.trim() }));
 
   const validPlans = plans.filter((p) => p.mealId !== null);
   if (validPlans.length === 0) {
-    res.json([]);
+    res.json(withCustomDishes([], customDishes));
     return;
   }
 
@@ -64,7 +84,7 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
 
   const result = aggregateShoppingList(rows, mealCounts, showHidden);
 
-  res.json(result);
+  res.json(withCustomDishes(result, customDishes));
 });
 
 // GET /api/planner?weekStart=YYYY-MM-DD

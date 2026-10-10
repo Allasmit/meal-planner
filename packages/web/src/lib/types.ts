@@ -105,6 +105,8 @@ export interface ShoppingListCategory {
     name: string;
     quantity: number;
     unit: string;
+    /** An own dish, listed exactly as entered (no amount). */
+    custom?: boolean;
   }[];
 }
 
