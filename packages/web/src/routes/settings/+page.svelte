@@ -4,6 +4,7 @@
   import { api } from '$lib/api';
   import { auth, isAdmin } from '$lib/stores/auth';
   import { logout } from '$lib/session';
+  import { getWeekStartDay, setWeekStartDay } from '$lib/utils';
   import FamilyManager from '$lib/components/FamilyManager.svelte';
   import type { User, PlannerRule, PlannerSettings, IngredientCategory } from '$lib/types';
 
@@ -14,7 +15,7 @@
   let rules = $state<PlannerRule[]>([]);
   let categories = $state<IngredientCategory[]>([]);
   let settingsError = $state('');
-  let settings = $state<PlannerSettings>({ monthlyBudget: null, batchCookingDay: 0 });
+  let settings = $state<PlannerSettings>({ monthlyBudget: null, batchCookingDay: 0, weekStartDay: getWeekStartDay() });
   let settingsSaving = $state(false);
   let settingsSaved = $state(false);
 
@@ -100,6 +101,7 @@
     settingsSaving = true; settingsSaved = false; settingsError = '';
     try {
       await api.updatePlannerSettings(settings);
+      setWeekStartDay(settings.weekStartDay);
       settingsSaved = true;
       setTimeout(() => settingsSaved = false, 2500);
     } catch (e: any) {
@@ -139,6 +141,21 @@
       <input id="monthly-budget" type="number" min="0" step="50" bind:value={settings.monthlyBudget} placeholder="e.g. 3000" disabled={!$isAdmin}
         class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-60"
         style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)" />
+    </div>
+
+    <div>
+      <div class="text-sm font-medium block mb-1" style="color: var(--color-text)">Week starts on</div>
+      <div class="flex flex-wrap gap-2">
+        {#each DAY_NAMES as day, i}
+          <button
+            onclick={() => settings.weekStartDay = i}
+            disabled={!$isAdmin}
+            aria-pressed={settings.weekStartDay === i}
+            class="text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-60"
+            style="{settings.weekStartDay === i ? 'background: var(--color-accent); color: white; border-color: var(--color-accent);' : 'border-color: var(--color-border); color: var(--color-text-muted);'}"
+          >{day}</button>
+        {/each}
+      </div>
     </div>
 
     <div>

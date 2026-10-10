@@ -175,6 +175,7 @@ export interface PlannerRule {
 export interface PlannerSettings {
   monthlyBudget: number | null;
   batchCookingDay: number;
+  weekStartDay: number;
 }
 
 export interface FamilyMemberInput {

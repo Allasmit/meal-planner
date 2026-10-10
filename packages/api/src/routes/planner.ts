@@ -211,7 +211,7 @@ plannerRouter.patch('/rules/:id', requireAdmin, async (req: AuthRequest, res: Re
 
 // ─── GET /api/planner/settings ────────────────────────────────────────────────
 
-async function readSettings(): Promise<{ monthlyBudget: number | null; batchCookingDay: number }> {
+async function readSettings(): Promise<{ monthlyBudget: number | null; batchCookingDay: number; weekStartDay: number }> {
   const rows = await db.select().from(userSettings);
   const settings: Record<string, string> = {};
   for (const row of rows) settings[row.key] = row.value;
@@ -219,6 +219,7 @@ async function readSettings(): Promise<{ monthlyBudget: number | null; batchCook
   return {
     monthlyBudget: Number.isFinite(budget) ? budget : null,
     batchCookingDay: settings['batch_cooking_day'] ? parseInt(settings['batch_cooking_day'], 10) : 0,
+    weekStartDay: settings['week_start_day'] ? parseInt(settings['week_start_day'], 10) : 1,
   };
 }
 
@@ -232,6 +233,7 @@ plannerRouter.patch('/settings', requireAdmin, async (req: AuthRequest, res: Res
   const schema = z.object({
     monthlyBudget: z.number().min(0).nullable().optional(),
     batchCookingDay: z.number().int().min(0).max(6).optional(),
+    weekStartDay: z.number().int().min(0).max(6).optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
@@ -244,6 +246,9 @@ plannerRouter.patch('/settings', requireAdmin, async (req: AuthRequest, res: Res
   }
   if (parsed.data.batchCookingDay !== undefined) {
     await upsert('batch_cooking_day', String(parsed.data.batchCookingDay));
+  }
+  if (parsed.data.weekStartDay !== undefined) {
+    await upsert('week_start_day', String(parsed.data.weekStartDay));
   }
 
   res.json({ ok: true });

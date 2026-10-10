@@ -1,17 +1,38 @@
+const WEEK_START_KEY = 'weekStartDay';
+
+function readStoredWeekStartDay(): number {
+  try {
+    const v = Number(localStorage.getItem(WEEK_START_KEY));
+    if (Number.isInteger(v) && v >= 0 && v <= 6) return v;
+  } catch { /* no storage (SSR / private mode) */ }
+  return 1; // Monday
+}
+
+/** First day of the planner week: 0=Sunday ... 6=Saturday. Kept in localStorage so it works offline. */
+let weekStartDay = readStoredWeekStartDay();
+
+export function getWeekStartDay(): number {
+  return weekStartDay;
+}
+
+export function setWeekStartDay(day: number): void {
+  if (!Number.isInteger(day) || day < 0 || day > 6) return;
+  weekStartDay = day;
+  try { localStorage.setItem(WEEK_START_KEY, String(day)); } catch { /* ignore */ }
+}
+
 /**
- * Returns the Monday of the week containing the given date.
+ * Returns the first day of the week (per the week-start setting) containing the given date.
  */
-export function getWeekStart(date: Date = new Date()): Date {
+export function getWeekStart(date: Date = new Date(), startDay: number = weekStartDay): Date {
   const d = new Date(date);
-  const day = d.getDay(); // 0=Sun ... 6=Sat
-  const diff = day === 0 ? -6 : 1 - day; // adjust to Monday
-  d.setDate(d.getDate() + diff);
+  d.setDate(d.getDate() - ((d.getDay() - startDay + 7) % 7));
   d.setHours(0, 0, 0, 0);
   return d;
 }
 
 /**
- * Returns an array of 7 Date objects starting from the given Monday.
+ * Returns an array of 7 Date objects starting from the given week start.
  */
 export function getWeekDays(weekStart: Date): Date[] {
   return Array.from({ length: 7 }, (_, i) => {

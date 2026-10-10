@@ -4,7 +4,7 @@
   import MealBrowser from '$lib/components/MealBrowser.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import FilterChip from '$lib/components/FilterChip.svelte';
-  import { getWeekStart, getWeekDays, toDateString, formatDayShort, formatWeekRange, MEAL_SLOTS, SLOT_LABELS, DIFFICULTY_COLORS } from '$lib/utils';
+  import { getWeekStart, getWeekStartDay, setWeekStartDay, getWeekDays, toDateString, formatDayShort, formatWeekRange, MEAL_SLOTS, SLOT_LABELS, DIFFICULTY_COLORS } from '$lib/utils';
   import type { MealPlan, Meal, FamilyMember, CostSummary, AutoGenerateResult } from '$lib/types';
 
   let weekStart = $state(getWeekStart());
@@ -31,6 +31,14 @@
 
   onMount(async () => {
     loadWeek();
+    // Pick up a week-start change made on another device.
+    api.getPlannerSettings().then((s) => {
+      if (typeof s.weekStartDay === 'number' && s.weekStartDay !== getWeekStartDay()) {
+        setWeekStartDay(s.weekStartDay);
+        weekStart = getWeekStart();
+        loadWeek();
+      }
+    }).catch(() => { /* keep the stored value */ });
     try { familyMembers = await api.getFamilyMembers(); } catch { /* the picker simply hides */ }
   });
 
