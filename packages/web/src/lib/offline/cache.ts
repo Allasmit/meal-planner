@@ -1,4 +1,4 @@
-import { get, set, del, keys } from './db';
+import { get, set, del, entries, setMany } from './db';
 
 const PREFIX = 'get:';
 
@@ -20,24 +20,35 @@ export function deleteCachedGet(path: string): Promise<void> {
   return del(cacheKey(path));
 }
 
-/**
- * Visit every cached GET entry whose path starts with `basePathPrefix`
- * (e.g. '/planner?' or '/meals'), letting `mutator` return a replacement
- * value to persist, or `undefined` to leave it untouched.
- */
-export async function forEachCachedGet(
-  basePathPrefix: string,
-  mutator: (data: any, path: string) => any | Promise<any>
-): Promise<void> {
-  const allKeys = await keys();
-  for (const key of allKeys) {
+/** Every cached GET response whose path satisfies `match`, read in a single transaction. */
+export async function findCachedGets(match: (path: string) => boolean): Promise<[path: string, data: any][]> {
+  const result: [string, any][] = [];
+  for (const [key, data] of await entries()) {
     if (typeof key !== 'string' || !key.startsWith(PREFIX)) continue;
     const path = key.slice(PREFIX.length);
-    if (!path.startsWith(basePathPrefix)) continue;
-    const data = await get<any>(key);
-    const updated = await mutator(data, path);
-    if (updated !== undefined) {
-      await set(key, updated);
-    }
+    if (match(path)) result.push([path, data]);
   }
+  return result;
+}
+
+/**
+ * Visit every cached GET entry whose path satisfies `match`, letting `mutator`
+ * return a replacement value to persist, or `undefined` to leave it untouched.
+ */
+export async function forEachCachedGet(
+  match: (path: string) => boolean,
+  mutator: (data: any, path: string) => any
+): Promise<void> {
+  const updates: [string, unknown][] = [];
+  for (const [path, data] of await findCachedGets(match)) {
+    const updated = mutator(data, path);
+    if (updated !== undefined) updates.push([cacheKey(path), updated]);
+  }
+  if (updates.length) await setMany(updates);
+}
+
+/** Matches a collection's list responses (`/meals`, `/meals?search=...`) but not its
+ * detail responses or other endpoints nested under it (`/meals/5`, `/meals/cuisines`). */
+export function isListPath(basePath: string): (path: string) => boolean {
+  return (path) => path === basePath || path.startsWith(basePath + '?');
 }

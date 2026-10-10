@@ -7,6 +7,8 @@ import {
 import { set } from './db';
 import { flushQueue, syncStatus } from './sync';
 import { get as getStore } from 'svelte/store';
+import { getCachedGet, setCachedGet } from './cache';
+import { applyOptimisticPatch } from './patch';
 
 beforeEach(async () => {
 	await clear();
@@ -144,5 +146,36 @@ describe('flushQueue', () => {
 		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')));
 		await flushQueue();
 		expect(await getQueue()).toHaveLength(2);
+	});
+});
+
+describe('applyOptimisticPatch', () => {
+	it('only changes the meal lists, not other cached lists that happen to share the id', async () => {
+		await setCachedGet('/meals', [{ id: 5, name: 'Soup' }]);
+		await setCachedGet('/meals?search=so', [{ id: 5, name: 'Soup' }]);
+		await setCachedGet('/meals/ingredients', [{ id: 5, name: 'Salt' }]);
+		await setCachedGet('/meals/cuisines', [{ id: 5, name: 'Thai' }]);
+
+		await applyOptimisticPatch('PUT', '/meals/5', '{"name":"Stew"}');
+		expect((await getCachedGet<any[]>('/meals'))![0].name).toBe('Stew');
+		expect((await getCachedGet<any[]>('/meals?search=so'))![0].name).toBe('Stew');
+		expect((await getCachedGet<any[]>('/meals/ingredients'))![0].name).toBe('Salt');
+
+		await applyOptimisticPatch('DELETE', '/meals/5');
+		expect(await getCachedGet('/meals')).toEqual([]);
+		expect(await getCachedGet('/meals/cuisines')).toEqual([{ id: 5, name: 'Thai' }]);
+	});
+
+	it('adds a planned dish to its own week only, and moves it between weeks', async () => {
+		await setCachedGet('/planner?weekStart=2026-10-05', []);
+		await setCachedGet('/planner?weekStart=2026-10-12', []);
+
+		await applyOptimisticPatch('POST', '/planner/2026-10-07/dinner', '{"customName":"Pizza"}', -900);
+		expect(await getCachedGet<any[]>('/planner?weekStart=2026-10-05')).toHaveLength(1);
+		expect(await getCachedGet<any[]>('/planner?weekStart=2026-10-12')).toHaveLength(0);
+
+		await applyOptimisticPatch('PUT', '/planner/entry/-900', '{"planDate":"2026-10-13"}');
+		expect(await getCachedGet<any[]>('/planner?weekStart=2026-10-05')).toHaveLength(0);
+		expect((await getCachedGet<any[]>('/planner?weekStart=2026-10-12'))![0]).toMatchObject({ id: -900, planDate: '2026-10-13', customName: 'Pizza' });
 	});
 });

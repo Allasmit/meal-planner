@@ -1,7 +1,7 @@
 import { getCachedGet, setCachedGet } from './offline/cache';
 import { enqueueMutation } from './offline/queue';
 import { applyOptimisticPatch } from './offline/patch';
-import { refreshPendingCount, flushQueue, markSynced, markOffline, isOnline } from './offline/sync';
+import { refreshPendingCount, flushQueue, markSynced, markOffline, isOnline, checkServer } from './offline/sync';
 import type {
   AutoGenerateRequest, AutoGenerateResult, CostSummary, CsvImportResult, Cuisine, DietaryType, FamilyMember,
   FamilyMemberInput, ImportedMeal, Ingredient, IngredientCategory, Meal, MealCategory, MealFormData, MealPlan,
@@ -27,6 +27,9 @@ const FETCH_TIMEOUT_MS = 6_000;
 // legitimately take far longer than a normal API call. Aborting them early would
 // make the UI report "offline" while the server still creates the recipe.
 const IMPORT_TIMEOUT_MS = 120_000;
+
+// How long a GET waits for the server before showing the cached copy (when there is one).
+const SLOW_RESPONSE_MS = 2_500;
 
 type MealImportBody = {
   sourceUrl?: string;
@@ -83,23 +86,47 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // and simple resource mutations (meals/planner/family/users) are deferred.
   const isQueueable = isMutation && !isFormData && !path.startsWith('/auth') && !path.startsWith('/import');
 
-  // Known offline: skip straight to queueing/cache instead of waiting on a
-  // doomed fetch. Checks BOTH `navigator.onLine` (the browser has no network
-  // interface at all) AND `isOnline()` (our own tracked reachability state,
-  // updated whenever a real request has failed) - `navigator.onLine` alone
-  // stays `true` on a device that's associated with wifi/cellular but can't
-  // actually reach the server, which otherwise meant every request paid the
-  // full FETCH_TIMEOUT_MS before falling back to cache, making the app feel
-  // slow instead of behaving like it knows it's offline.
-  if (typeof navigator !== 'undefined' && (!navigator.onLine || !isOnline())) {
+  // Known offline (see isOnline() in offline/sync.ts - it also covers a phone
+  // that's on wifi/cellular but can't reach the server): answer from the
+  // outbox/cache straight away instead of waiting on a doomed fetch.
+  if (typeof navigator !== 'undefined' && !isOnline()) {
     if (isMutation) {
       if (isQueueable) return queueOfflineMutation<T>(path, method, options?.body as string | undefined);
       throw new Error('You are offline. This action requires an internet connection.');
     }
     const cached = await getCachedGet<T>(path);
     if (cached !== undefined) return cached;
+    // Nothing cached: check whether the server is back (one health check shared by every
+    // request waiting here, or the answer of one that just failed) rather than each request
+    // waiting for its own full timeout.
+    if (!(await checkServer())) throw new Error('You are offline and this data is not available yet.');
   }
 
+  const network = send<T>(path, method, isQueueable, headers, options);
+  if (isMutation) return network;
+
+  // A GET we already have data for: if the server is slow to answer (weak signal, or a
+  // connection that hangs instead of failing), show the cached copy instead of leaving the
+  // page waiting for the full timeout. The request carries on in the background and
+  // refreshes the cache (or marks the app offline) when it finishes.
+  const cached = await getCachedGet<T>(path).catch(() => undefined);
+  if (cached === undefined) return network;
+  network.catch(() => {});
+  return Promise.race([
+    network,
+    new Promise<T>((resolve) => setTimeout(() => resolve(cached), SLOW_RESPONSE_MS)),
+  ]);
+}
+
+/** Performs the request; on a network failure falls back to the cache (GET) or the outbox (mutations). */
+async function send<T>(
+  path: string,
+  method: string,
+  isQueueable: boolean,
+  headers: Record<string, string>,
+  options?: RequestInit,
+): Promise<T> {
+  const isMutation = method !== 'GET';
   try {
     const res = await fetch(`${BASE}${path}`, {
       credentials: 'include',
@@ -201,7 +228,10 @@ export const api = {
     request<Ingredient>(`/meals/ingredients/${id}`, { method: 'PATCH', body: json(body) }),
 
   getMeals: (params?: Record<string, string>) => {
-    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    // No trailing "?" without filters: the offline cache is keyed by the exact path, and the
+    // precached full list is stored under "/meals".
+    const query = new URLSearchParams(params).toString();
+    const qs = query ? `?${query}` : '';
     return request<Meal[]>(`/meals${qs}`);
   },
   getMeal: (id: number) => request<Meal>(`/meals/${id}`),

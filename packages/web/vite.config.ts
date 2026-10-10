@@ -3,6 +3,9 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { APP_SHELL_URLS } from './src/pwa/shells';
+
+const BUILD_ID = Date.now().toString(36);
 
 export default defineConfig({
 	plugins: [
@@ -23,7 +26,10 @@ export default defineConfig({
 			// register it explicitly instead via `virtual:pwa-register/svelte` in
 			// +layout.svelte, so disable the (non-functional) auto-injection.
 			injectRegister: false,
-			devOptions: { enabled: true },
+			// Vite's dev server serves unbundled modules that are never precached, so a service worker
+			// can't make the dev build work offline - it only served stale pages. Test offline mode with
+			// a production build (`pnpm build && pnpm start`).
+			devOptions: { enabled: false },
 			manifest: {
 				name: 'Meal Planner',
 				short_name: 'Meals',
@@ -39,51 +45,16 @@ export default defineConfig({
 					{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
 				],
 			},
-			workbox: {
+			// Our own service worker (src/pwa/sw.ts), so page navigations can be served from the app
+			// shell matching the URL's depth - see the comments there.
+			strategies: 'injectManifest',
+			srcDir: 'src/pwa',
+			filename: 'sw.ts',
+			injectManifest: {
 				globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-				// vite-plugin-pwa defaults this to 'index.html', which registers a
-				// NavigationRoute that tries to serve a precached "index.html" for
-				// every navigation - but this SvelteKit build (adapter-node, SSR)
-				// never produces a top-level index.html, so that default silently
-				// breaks ALL navigations once the SW takes control (including while
-				// online). Explicitly disable it; the `pages-cache` runtimeCaching
-				// rule below handles offline page navigation correctly instead.
-				navigateFallback: undefined,
-				runtimeCaching: [
-					// Cache full page navigations (reloads / deep links / PWA launch)
-					// so previously-visited routes still open when offline. Pages here
-					// render the same generic app shell regardless of URL (all data is
-					// fetched client-side), so caching them by their own URL is safe.
-					// NOTE: `navigateFallback` was considered instead, but SvelteKit's
-					// adapter-node writes prerendered pages to build/prerendered/,
-					// separate from build/client/, so they never end up in the SW's
-					// precache manifest - this runtime-caching approach works with the
-					// actual build layout without needing a prerendered fallback page.
-					{
-						urlPattern: ({ request }: { request: Request }) => request.mode === 'navigate',
-						handler: 'NetworkFirst',
-						options: {
-							cacheName: 'pages-cache',
-							networkTimeoutSeconds: 4,
-							expiration: { maxEntries: 30, maxAgeSeconds: 7 * 24 * 60 * 60 },
-						},
-					},
-					// API data is cached in IndexedDB by src/lib/offline (it is per-user and wiped on sign-out), so
-					// there are deliberately no service-worker rules for /api/* data responses. (Regex url patterns
-					// anchored with ^/api never matched the full https://host/api/... URL anyway.)
-					//
-					// Meal photos are content-addressed (the file name is a hash), so they never change and can be
-					// served from cache first. Cleared on sign-out via clearOfflineData().
-					{
-						urlPattern: ({ url }: { url: URL }) => url.pathname.startsWith('/api/images/'),
-						handler: 'CacheFirst',
-						options: {
-							cacheName: 'images-cache',
-							cacheableResponse: { statuses: [200] },
-							expiration: { maxEntries: 300, maxAgeSeconds: 90 * 24 * 60 * 60 },
-						},
-					},
-				],
+				// The app shells are rendered by the server, not files in the build. The revision changes on
+				// every build, so each deploy precaches shells that match its own JS/CSS.
+				additionalManifestEntries: APP_SHELL_URLS.map((url) => ({ url, revision: BUILD_ID })),
 			},
 		}),
 	],

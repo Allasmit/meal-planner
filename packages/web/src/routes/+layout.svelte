@@ -1,11 +1,13 @@
 <script lang="ts">
   import '../app.css';
   import { page } from '$app/stores';
-  import { goto, afterNavigate } from '$app/navigation';
+  import { goto } from '$app/navigation';
   import { auth, isLoggedIn } from '$lib/stores/auth';
   import { api } from '$lib/api';
-  import { initSync } from '$lib/offline/sync';
-  import { cacheCurrentPage, clearPageCache } from '$lib/offline/page-cache';
+  import { initSync, syncStatus } from '$lib/offline/sync';
+  import { clearPageCache } from '$lib/offline/page-cache';
+  import { getCachedGet } from '$lib/offline/cache';
+  import type { User } from '$lib/types';
   import { runFullPrecache } from '$lib/offline/precache';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import UserMenu from '$lib/components/UserMenu.svelte';
@@ -32,31 +34,27 @@
       import('virtual:pwa-register').then(({ registerSW }) => {
         registerSW({ immediate: true });
       });
-
-      // A new service worker version has just taken control (i.e. a fresh
-      // deploy was picked up). Wipe the cached page-snapshot cache - it may
-      // hold HTML from the previous build referencing hashed asset files
-      // Workbox's precache has already discarded, which otherwise breaks
-      // hydration on a later offline reload (see clearPageCache() for
-      // details). Re-cache the current route immediately so it stays
-      // available offline right away.
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        clearPageCache().then(() => {
-          cacheCurrentPage();
-          // A fresh deploy may have added/changed routes or meals - redo the
-          // full precache (ignoring the usual throttle) so every page and
-          // meal is available offline again under the new build.
-          runFullPrecache({ force: true });
-        });
-      });
     }
+    // Snapshots from older versions are no longer used (the service worker serves the app shell).
+    clearPageCache();
 
-    // Re-run the full offline precache whenever the browser regains
-    // connectivity, so data added/changed while offline (by this device or
-    // others) eventually makes it into the offline cache too. Throttled
-    // internally - this is just reacting to a real connectivity change, not
-    // new background polling.
-    window.addEventListener('online', () => runFullPrecache());
+    // Re-run the full offline precache whenever the server becomes reachable
+    // again, so data added/changed while offline (by this device or others)
+    // eventually makes it into the offline cache too. Throttled internally.
+    let wasOnline = true;
+    syncStatus.subscribe(({ online }) => {
+      if (online && !wasOnline) runFullPrecache();
+      wasOnline = online;
+    });
+
+    // A user who was signed in on this device last time sees the app straight away (from the
+    // offline cache) instead of a spinner while the server is asked - which, on a connection that
+    // hangs, would take seconds. The checks below still run and sign them out if the session ended.
+    const [cachedStatus, cachedUser] = await Promise.all([
+      getCachedGet<{ setupRequired: boolean }>('/auth/setup-status'),
+      getCachedGet<User>('/auth/me'),
+    ]).catch(() => [undefined, undefined]);
+    if (cachedUser && cachedStatus?.setupRequired === false) auth.setUser(cachedUser);
 
     try {
       // Run both auth checks in parallel rather than sequentially awaiting
@@ -83,13 +81,6 @@
       auth.setUser(null);
     }
     auth.setLoading(false);
-  });
-
-  // Cache the current route's full HTML document (for offline reloads) after
-  // every navigation, including the initial one. See page-cache.ts for why
-  // this is needed instead of relying on the service worker alone.
-  afterNavigate(() => {
-    cacheCurrentPage();
   });
 
   function toggleDarkMode() {

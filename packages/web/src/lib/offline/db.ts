@@ -1,4 +1,7 @@
-import { createStore, get as idbGet, set as idbSet, del as idbDel, keys as idbKeys, clear as idbClear } from 'idb-keyval';
+import {
+  createStore, get as idbGet, set as idbSet, del as idbDel, keys as idbKeys, clear as idbClear, entries as idbEntries,
+  setMany as idbSetMany,
+} from 'idb-keyval';
 
 // Dedicated IndexedDB store for offline caching of GET responses and the
 // outbox of mutations made while offline.
@@ -18,6 +21,14 @@ export function del(key: string): Promise<void> {
 
 export function keys(): Promise<IDBValidKey[]> {
   return idbKeys(store);
+}
+
+export function entries(): Promise<[IDBValidKey, any][]> {
+  return idbEntries(store);
+}
+
+export function setMany(items: [IDBValidKey, unknown][]): Promise<void> {
+  return idbSetMany(items, store);
 }
 
 export function clear(): Promise<void> {

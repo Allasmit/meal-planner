@@ -481,6 +481,8 @@ caddy validate --config C:\caddy\Caddyfile
 
 Recipe pages are cached offline by the service worker.
 
+Offline mode only runs in a production build (`pnpm build && pnpm start`). The dev server doesn't register a service worker, because Vite's unbundled dev modules can't be cached for offline use.
+
 **Outside your home network:** Install [Tailscale](https://tailscale.com/) (free) on server + phone — no port forwarding needed.
 
 ---

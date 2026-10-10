@@ -1,20 +1,29 @@
-import { forEachCachedGet, getCachedGet, setCachedGet, deleteCachedGet } from './cache';
+import { forEachCachedGet, findCachedGets, getCachedGet, setCachedGet, deleteCachedGet, isListPath } from './cache';
 
-/** Find a previously-cached meal (from a list or detail fetch) by id, used to
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Find a previously-cached meal (from a detail or list fetch) by id, used to
  * fill in denormalized fields (name/difficulty/times) for optimistic planner updates. */
 async function findCachedMeal(mealId: number): Promise<any | undefined> {
-  let found: any;
-  await forEachCachedGet('/meals', (data) => {
-    if (found) return undefined;
-    if (Array.isArray(data)) {
-      found = data.find((m: any) => m?.id === mealId);
-    } else if (data && data.id === mealId) {
-      found = data;
-    }
-    return undefined;
-  });
-  return found;
+  const detail = await getCachedGet<any>(`/meals/${mealId}`);
+  if (detail) return detail;
+  for (const [, data] of await findCachedGets(isListPath('/meals'))) {
+    const found = Array.isArray(data) ? data.find((m: any) => m?.id === mealId) : undefined;
+    if (found) return found;
+  }
+  return undefined;
 }
+
+/** Whether `date` (YYYY-MM-DD) falls in the week cached under `path` (`/planner?weekStart=YYYY-MM-DD`). */
+function weekContains(path: string, date: string | undefined): boolean {
+  const weekStart = new URLSearchParams(path.split('?')[1]).get('weekStart');
+  if (!weekStart || !date) return false;
+  const start = Date.parse(`${weekStart}T00:00:00Z`);
+  const day = Date.parse(`${date}T00:00:00Z`);
+  return day >= start && day < start + 7 * DAY_MS;
+}
+
+const isWeekPlanPath = (path: string) => path.startsWith('/planner?');
 
 /** Optimistic update of the cached week plans for the three planner mutations:
  * POST /planner/:date/:slot (add a dish), PUT /planner/entry/:id (move/edit) and DELETE /planner/entry/:id. */
@@ -30,36 +39,46 @@ async function patchPlannerEntries(method: string, target: { date?: string; slot
     }),
   });
 
-  await forEachCachedGet('/planner?', async (data) => {
+  if (method === 'POST') {
+    const entry = denormalize({
+      id: tempId ?? -Date.now(),
+      planDate: target.date,
+      mealSlot: target.slot,
+      mealId: body?.mealId ?? null,
+      servings: body?.servings ?? meal?.servings ?? 1,
+      notes: body?.notes ?? null,
+      customName: body?.customName ?? null,
+      assignedByUserId: null,
+      mealName: null,
+      mealPrepTime: null,
+      mealCookTime: null,
+      mealDifficulty: null,
+      assignedByDisplayName: null,
+      _pendingSync: true,
+    });
+    // Only the week the new dish belongs to.
+    await forEachCachedGet(isWeekPlanPath, (data, path) =>
+      Array.isArray(data) && weekContains(path, target.date) ? [...data, entry] : undefined
+    );
+    return;
+  }
+
+  const weeks = await findCachedGets(isWeekPlanPath);
+  const existing = weeks
+    .flatMap(([, data]) => (Array.isArray(data) ? data : []))
+    .find((p: any) => p?.id === target.id);
+  if (!existing) return;
+  // A move (PUT with a new planDate) can take the entry into a different cached week.
+  const updated = method === 'DELETE' ? undefined : denormalize({ ...existing, ...body, _pendingSync: true });
+
+  await forEachCachedGet(isWeekPlanPath, (data, path) => {
     if (!Array.isArray(data)) return undefined;
-
-    if (method === 'POST') {
-      return [
-        ...data,
-        denormalize({
-          id: tempId ?? -Date.now(),
-          planDate: target.date,
-          mealSlot: target.slot,
-          mealId: body?.mealId ?? null,
-          servings: body?.servings ?? meal?.servings ?? 1,
-          notes: body?.notes ?? null,
-          customName: body?.customName ?? null,
-          assignedByUserId: null,
-          mealName: null,
-          mealPrepTime: null,
-          mealCookTime: null,
-          mealDifficulty: null,
-          assignedByDisplayName: null,
-          _pendingSync: true,
-        }),
-      ];
-    }
-
-    const idx = data.findIndex((p: any) => p.id === target.id);
-    if (idx === -1) return undefined;
+    const idx = data.findIndex((p: any) => p?.id === target.id);
+    const belongsHere = updated !== undefined && weekContains(path, updated.planDate);
+    if (idx === -1 && !belongsHere) return undefined;
     const next = data.slice();
-    if (method === 'DELETE') next.splice(idx, 1);
-    else next[idx] = denormalize({ ...next[idx], ...body, _pendingSync: true });
+    if (idx !== -1) next.splice(idx, 1, ...(belongsHere ? [updated] : []));
+    else next.push(updated);
     return next;
   });
 }
@@ -68,13 +87,14 @@ async function patchPlannerEntries(method: string, target: { date?: string; slot
  * (meals, family, users, meals/ingredients): keeps any cached list/detail
  * responses in sync with pending create/update/delete mutations. */
 async function patchEntityCollections(basePath: string, method: string, id: number | undefined, body: any, tempId?: number) {
+  const isList = isListPath(basePath);
+
   if (method === 'POST') {
     // Create: prepend an optimistic item (temp negative id) to the unfiltered list cache only.
-    const listPath = basePath;
-    const existing = await getCachedGet<any[]>(listPath);
+    const existing = await getCachedGet<any[]>(basePath);
     if (Array.isArray(existing)) {
       const optimistic = { id: tempId ?? -Date.now(), ...body, _pendingSync: true };
-      await setCachedGet(listPath, [optimistic, ...existing]);
+      await setCachedGet(basePath, [optimistic, ...existing]);
     }
     return;
   }
@@ -84,7 +104,7 @@ async function patchEntityCollections(basePath: string, method: string, id: numb
 
   if (method === 'DELETE') {
     await deleteCachedGet(itemPath);
-    await forEachCachedGet(basePath, (data) => {
+    await forEachCachedGet(isList, (data) => {
       if (!Array.isArray(data)) return undefined;
       const idx = data.findIndex((x: any) => x?.id === id);
       if (idx === -1) return undefined;
@@ -100,7 +120,7 @@ async function patchEntityCollections(basePath: string, method: string, id: numb
   if (detail) {
     await setCachedGet(itemPath, { ...detail, ...body, _pendingSync: true });
   }
-  await forEachCachedGet(basePath, (data) => {
+  await forEachCachedGet(isList, (data) => {
     if (!Array.isArray(data)) return undefined;
     const idx = data.findIndex((x: any) => x?.id === id);
     if (idx === -1) return undefined;
@@ -130,7 +150,8 @@ export async function applyOptimisticPatch(method: string, path: string, bodyRaw
     return;
   }
 
-  const entityMatch = path.match(/^\/(meals|family|users|meals\/ingredients)(?:\/(\d+))?$/);
+  // Ids can be negative: records created offline keep a temporary id until they sync.
+  const entityMatch = path.match(/^\/(meals\/ingredients|meals|family|users)(?:\/(-?\d+))?$/);
   if (entityMatch) {
     const [, basePath, idStr] = entityMatch;
     await patchEntityCollections(`/${basePath}`, method, idStr ? Number(idStr) : undefined, body, tempId);

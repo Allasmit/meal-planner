@@ -2,7 +2,7 @@ import { clear } from './db';
 import { clearPageCache } from './page-cache';
 import { refreshPendingCount } from './sync';
 
-const LOCAL_STORAGE_KEYS = ['menu-plan-last-synced-at', 'menu-plan-last-full-precache-at'];
+const LOCAL_STORAGE_KEYS = ['menu-plan-last-synced-at', 'menu-plan-last-full-precache-at', 'menu-plan-last-full-precache-v2-at', 'menu-plan-offline-at'];
 
 /**
  * Removes everything the offline layer stored on this device (cached API responses, the
