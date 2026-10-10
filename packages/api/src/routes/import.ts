@@ -16,6 +16,7 @@ import {
   mealDietaryTypes,
   cuisines,
   mealSuitableFor,
+  mealPreferredBy,
   familyMembers,
 } from '../db/schema';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -935,6 +936,7 @@ importRouter.get('/csv-template', (_req: AuthRequest, res: Response): void => {
     'suitable_for (pipe-separated family member names)',
     'instructions (pipe-separated)',
     'ingredients (name:quantity:unit[:notes] separated by |)',
+    'preferred_by (pipe-separated family member names)',
   ]);
 
   const example = toCsvRow([
@@ -959,6 +961,7 @@ importRouter.get('/csv-template', (_req: AuthRequest, res: Response): void => {
     'Mom|Dad',
     'Brown the mince|Add tomatoes and simmer|Cook pasta al dente|Combine and serve',
     'Minced beef:500:g|Spaghetti:400:g|Tinned tomatoes:400:g|Onion:1:whole|Garlic:3:cloves',
+    'Dad',
   ]);
 
   const csv = header + '\n' + example + '\n';
@@ -1026,7 +1029,7 @@ importRouter.post('/csv', async (req: AuthRequest, res: Response): Promise<void>
     const [
       name, description, prepStr, cookStr, servingsStr, difficulty, cuisineName, costStr, proteinType,
       mealCategory, leftoverBehaviour, sourceUrl, imageUrl, isTestedStr, isFavouriteStr, isSpecialOccasionStr,
-      notes, dietaryTypesRaw, suitableForRaw, instructionsRaw, ingredientsRaw,
+      notes, dietaryTypesRaw, suitableForRaw, instructionsRaw, ingredientsRaw, preferredByRaw,
     ] = dataRows[i];
 
     if (!name?.trim()) continue;
@@ -1065,6 +1068,13 @@ importRouter.post('/csv', async (req: AuthRequest, res: Response): Promise<void>
         const id = memberByName.get(normaliseName(memberName));
         if (id === undefined) warnings.push(`Unknown family member "${memberName}"`);
         else memberIds.push(id);
+      }
+
+      const preferredMemberIds: number[] = [];
+      for (const memberName of splitPipe(preferredByRaw)) {
+        const id = memberByName.get(normaliseName(memberName));
+        if (id === undefined) warnings.push(`Unknown family member "${memberName}"`);
+        else preferredMemberIds.push(id);
       }
 
       await db.transaction(async (tx) => {
@@ -1125,6 +1135,9 @@ importRouter.post('/csv', async (req: AuthRequest, res: Response): Promise<void>
         }
         if (memberIds.length > 0) {
           await tx.insert(mealSuitableFor).values([...new Set(memberIds)].map((familyMemberId) => ({ mealId: meal.id, familyMemberId })));
+        }
+        if (preferredMemberIds.length > 0) {
+          await tx.insert(mealPreferredBy).values([...new Set(preferredMemberIds)].map((familyMemberId) => ({ mealId: meal.id, familyMemberId })));
         }
       });
 
