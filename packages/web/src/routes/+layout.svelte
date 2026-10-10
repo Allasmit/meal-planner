@@ -8,6 +8,7 @@
   import { cacheCurrentPage, clearPageCache } from '$lib/offline/page-cache';
   import { runFullPrecache } from '$lib/offline/precache';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
+  import UserMenu from '$lib/components/UserMenu.svelte';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
 
@@ -116,16 +117,44 @@
   const navItems = [
     { href: '/planner', label: 'Planner', icon: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z' },
     { href: '/meals', label: 'Meals', icon: 'M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2M7 2v20M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3zm0 0v7' },
-    { href: '/family', label: 'Family', icon: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' },
     { href: '/shopping-list', label: 'Shopping', icon: 'M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0' },
     { href: '/import', label: 'Import', icon: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3' },
-    { href: '/settings', label: 'Settings', icon: 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z' },
   ];
 
-  const initials = $derived(
-    ($auth.user?.displayName ?? '?').trim().split(/\s+/).map((w: string) => w[0]).slice(0, 2).join('').toUpperCase()
-  );
+  // ─── Header: page title, back button, hide-on-scroll ───────────────────────
+  const TITLES: [string, string][] = [
+    ['/planner', 'Planner'],
+    ['/meals', 'Meals'],
+    ['/shopping-list', 'Shopping'],
+    ['/import', 'Import'],
+    ['/settings', 'Settings'],
+  ];
+  const pathname = $derived($page.url.pathname);
+  const pageTitle = $derived(TITLES.find(([p]) => pathname.startsWith(p))?.[1] ?? 'Meal Planner');
+  // Detail pages (/meals/new, /meals/12, /meals/12/edit) get a back arrow.
+  const isDetail = $derived(/^\/meals\/.+/.test(pathname));
+
+  function goBack() {
+    if (history.length > 1) history.back();
+    else goto('/meals');
+  }
+
+  let scrolled = $state(false);
+  let hidden = $state(false);
+  let lastY = 0;
+
+  function onScroll() {
+    const y = window.scrollY;
+    scrolled = y > 4;
+    // Only auto-hide on phones; on wider screens the bar stays put.
+    const mobile = window.matchMedia('(max-width: 639px)').matches;
+    if (!mobile || y < 56) hidden = false;
+    else if (Math.abs(y - lastY) > 8) hidden = y > lastY;
+    lastY = y;
+  }
 </script>
+
+<svelte:window onscroll={onScroll} />
 
 {#if $auth.loading}
   <div class="flex items-center justify-center min-h-screen" style="background: var(--color-bg)">
@@ -136,27 +165,32 @@
 {:else if $isLoggedIn}
   <div class="flex flex-col min-h-screen" style="background: var(--color-bg)">
     <header
-      class="px-4 py-2.5 flex items-center justify-between sticky top-0 z-40 border-b backdrop-blur-xl print:hidden"
-      style="background: var(--color-header-bg); color: var(--color-header-text); border-color: var(--color-border); padding-top: max(0.625rem, env(safe-area-inset-top))"
+      class="px-3 sm:px-4 flex items-center justify-between gap-2 sticky top-0 z-40 backdrop-blur-xl print:hidden transition-[transform,box-shadow] duration-200"
+      style="background: var(--color-header-bg); color: var(--color-header-text); padding-top: max(0.5rem, env(safe-area-inset-top)); padding-bottom: 0.5rem; transform: translateY({hidden ? '-100%' : '0'}); box-shadow: {scrolled ? '0 1px 0 var(--color-border), 0 4px 12px -6px rgb(16 24 40 / 0.12)' : 'none'}"
     >
-      <a href="/planner" class="flex items-center gap-2.5 font-bold text-lg tracking-tight">
-        <span class="w-8 h-8 rounded-xl flex items-center justify-center text-base text-white shadow-sm" style="background: linear-gradient(135deg, var(--color-accent), #0f6c4b)">🥘</span>
-        <span>Meal Planner</span>
-      </a>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 min-w-0">
+        {#if isDetail}
+          <button
+            onclick={goBack}
+            class="w-10 h-10 -ml-1 rounded-full flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 shrink-0"
+            aria-label="Back"
+          >
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
+        {:else}
+          <a href="/planner" class="hidden sm:flex items-center gap-2.5 font-bold text-lg tracking-tight shrink-0">
+            <span class="w-8 h-8 rounded-xl flex items-center justify-center text-base text-white shadow-sm" style="background: linear-gradient(135deg, var(--color-accent), #0f6c4b)">🥘</span>
+            <span>Meal Planner</span>
+          </a>
+        {/if}
+        <!-- Phones show the current page; wider screens already have the brand. -->
+        <span class="text-lg font-bold tracking-tight truncate {isDetail ? '' : 'sm:hidden'}">
+          {isDetail ? 'Meals' : pageTitle}
+        </span>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
         <OfflineIndicator />
-        <button
-          onclick={toggleDarkMode}
-          class="w-9 h-9 rounded-full flex items-center justify-center text-base hover:bg-black/5 dark:hover:bg-white/10"
-          title="Toggle dark mode"
-          aria-label="Toggle dark mode"
-        >{darkMode ? '☀️' : '🌙'}</button>
-        <span
-          class="w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold"
-          style="background: var(--color-accent-light); color: var(--color-accent-text)"
-          title={$auth.user?.displayName}
-          aria-label={$auth.user?.displayName}
-        >{initials}</span>
+        <UserMenu {darkMode} ontoggledark={toggleDarkMode} />
       </div>
     </header>
     <main class="flex-1 pb-24 print:pb-0">

@@ -88,6 +88,7 @@ plannerRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =>
       mealId: mealPlans.mealId,
       servings: mealPlans.servings,
       notes: mealPlans.notes,
+      customName: mealPlans.customName,
       assignedByUserId: mealPlans.assignedByUserId,
       mealName: meals.name,
       mealPrepTime: meals.prepTimeMinutes,
@@ -113,24 +114,32 @@ plannerRouter.post('/:date/:slot', async (req: AuthRequest, res: Response): Prom
   if (!DATE_RE.test(date)) { res.status(400).json({ error: 'Invalid date format' }); return; }
   if (!(VALID_SLOTS as readonly string[]).includes(slot)) { res.status(400).json({ error: 'Invalid meal slot' }); return; }
 
-  const schema = z.object({
-    mealId: z.number().int(),
-    servings: z.number().int().min(1).default(2),
-    notes: z.string().optional().nullable(),
-  });
+  const schema = z
+    .object({
+      mealId: z.number().int().optional(),
+      customName: z.string().trim().min(1).max(120).optional(),
+      servings: z.number().int().min(1).default(2),
+      notes: z.string().optional().nullable(),
+    })
+    .refine((v) => (v.mealId === undefined) !== (v.customName === undefined), {
+      message: 'Provide either mealId or customName',
+    });
 
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  const [meal] = await db.select({ id: meals.id }).from(meals).where(eq(meals.id, parsed.data.mealId));
-  if (!meal) { res.status(404).json({ error: 'Meal not found' }); return; }
+  if (parsed.data.mealId !== undefined) {
+    const [meal] = await db.select({ id: meals.id }).from(meals).where(eq(meals.id, parsed.data.mealId));
+    if (!meal) { res.status(404).json({ error: 'Meal not found' }); return; }
+  }
 
   const [saved] = await db
     .insert(mealPlans)
     .values({
       planDate: date,
       mealSlot: slot as (typeof VALID_SLOTS)[number],
-      mealId: parsed.data.mealId,
+      mealId: parsed.data.mealId ?? null,
+      customName: parsed.data.customName ?? null,
       servings: parsed.data.servings,
       notes: parsed.data.notes,
       assignedByUserId: req.user!.userId,
@@ -148,6 +157,7 @@ plannerRouter.put('/entry/:id', async (req: AuthRequest, res: Response): Promise
     planDate: z.string().regex(DATE_RE).optional(),
     mealSlot: z.enum(VALID_SLOTS).optional(),
     mealId: z.number().int().optional(),
+    customName: z.string().trim().min(1).max(120).optional(),
     servings: z.number().int().min(1).optional(),
     notes: z.string().optional().nullable(),
   });
@@ -325,12 +335,18 @@ plannerRouter.post('/auto-generate', async (req: AuthRequest, res: Response): Pr
 
   const dates = parsed.data.days.map((d) => d.date).sort();
   const existing = await db
-    .select({ date: mealPlans.planDate, slot: mealPlans.mealSlot, mealId: mealPlans.mealId })
+    .select({ date: mealPlans.planDate, slot: mealPlans.mealSlot, mealId: mealPlans.mealId, customName: mealPlans.customName })
     .from(mealPlans)
     .where(between(mealPlans.planDate, dates[0], dates[dates.length - 1]));
 
+  // A slot holding a free-text dish counts as taken: auto-plan must not wipe it unless overwriting.
+  const customSlots = new Set(existing.filter((p) => p.customName).map((p) => `${p.date}::${p.slot}`));
+  const daysToFill = parsed.data.overwriteExisting
+    ? parsed.data.days
+    : parsed.data.days.filter((d) => !customSlots.has(`${d.date}::${d.slot}`));
+
   const generated = generatePlan({
-    days: parsed.data.days,
+    days: daysToFill,
     meals: allMeals.map((m) => ({
       id: m.id,
       prepTimeMinutes: m.prepTimeMinutes,

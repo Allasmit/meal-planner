@@ -210,9 +210,9 @@ export const api = {
   deleteMeal: (id: number) => request<{ ok: true }>(`/meals/${id}`, { method: 'DELETE' }),
 
   getWeekPlan: (weekStart: string) => request<MealPlan[]>(`/planner?weekStart=${weekStart}`),
-  addPlanEntry: (date: string, slot: string, body: { mealId: number; servings?: number; notes?: string | null }) =>
+  addPlanEntry: (date: string, slot: string, body: { mealId: number; servings?: number; notes?: string | null } | { customName: string; servings?: number; notes?: string | null }) =>
     request<MealPlan>(`/planner/${date}/${slot}`, { method: 'POST', body: json(body) }),
-  updatePlanEntry: (id: number, body: { planDate?: string; mealSlot?: string; mealId?: number; servings?: number; notes?: string | null }) =>
+  updatePlanEntry: (id: number, body: { planDate?: string; mealSlot?: string; mealId?: number; customName?: string; servings?: number; notes?: string | null }) =>
     request<MealPlan>(`/planner/entry/${id}`, { method: 'PUT', body: json(body) }),
   removePlanEntry: (id: number) =>
     request<{ ok: true }>(`/planner/entry/${id}`, { method: 'DELETE' }),

@@ -84,6 +84,8 @@ export interface MealPlan {
   mealId: number | null;
   servings: number;
   notes: string | null;
+  /** Free-text dish with no recipe (mealId is null). */
+  customName: string | null;
   assignedByUserId: number | null;
   mealName: string | null;
   mealPrepTime: number | null;

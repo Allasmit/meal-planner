@@ -3,9 +3,8 @@
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
   import { auth, isAdmin } from '$lib/stores/auth';
-  import { flushQueue } from '$lib/offline/sync';
-  import { queueLength } from '$lib/offline/queue';
-  import { clearOfflineData } from '$lib/offline/clear';
+  import { logout } from '$lib/session';
+  import FamilyManager from '$lib/components/FamilyManager.svelte';
   import type { User, PlannerRule, PlannerSettings, IngredientCategory } from '$lib/types';
 
   let users = $state<User[]>([]);
@@ -49,24 +48,6 @@
   async function loadUsers() {
     loadingUsers = true;
     try { users = await api.getUsers() as User[]; } finally { loadingUsers = false; }
-  }
-
-  async function logout() {
-    // Push any offline changes first; they would be lost along with the local cache.
-    await flushQueue();
-    const pending = await queueLength();
-    if (pending > 0 && !confirm(`${pending} change(s) haven't synced to the server yet and will be lost if you sign out. Sign out anyway?`)) {
-      return;
-    }
-
-    try {
-      await api.logout();
-    } catch {
-      /* Offline: the server session simply expires on its own. */
-    }
-    await clearOfflineData();
-    auth.clear();
-    goto('/login');
   }
 
   async function addUser() {
@@ -182,6 +163,9 @@
     </button>
     {#if settingsError}<p class="text-sm" role="alert" style="color: var(--color-danger)">{settingsError}</p>{/if}
   </div>
+
+  <!-- Family profiles -->
+  <FamilyManager />
 
   <!-- Weekly rules -->
   {#if rules.length > 0}

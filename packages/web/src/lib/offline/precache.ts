@@ -24,7 +24,6 @@ const STATIC_ROUTES = [
 	'/planner',
 	'/meals',
 	'/meals/new',
-	'/family',
 	'/shopping-list',
 	'/settings',
 	'/import',

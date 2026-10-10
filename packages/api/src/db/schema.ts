@@ -120,6 +120,8 @@ export const mealPlans = sqliteTable(
     mealId: integer('meal_id').references(() => meals.id, { onDelete: 'set null' }),
     servings: integer('servings').notNull().default(2),
     notes: text('notes'),
+    /** Free-text dish with no recipe behind it (mealId is null). */
+    customName: text('custom_name'),
     leftoversRequired: integer('leftovers_required', { mode: 'boolean' }).notNull().default(false),
     prepTimeLimitMinutes: integer('prep_time_limit_minutes'),
     assignedByUserId: integer('assigned_by_user_id').references(() => users.id),

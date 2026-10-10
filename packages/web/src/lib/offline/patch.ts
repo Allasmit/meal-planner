@@ -43,6 +43,7 @@ async function patchPlannerEntries(method: string, target: { date?: string; slot
           mealId: body?.mealId ?? null,
           servings: body?.servings ?? meal?.servings ?? 1,
           notes: body?.notes ?? null,
+          customName: body?.customName ?? null,
           assignedByUserId: null,
           mealName: null,
           mealPrepTime: null,

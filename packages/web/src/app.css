@@ -75,7 +75,7 @@ body {
 h1, h2, h3 { letter-spacing: -0.015em; }
 
 /* Smooth page entrance */
-main { animation: page-in 0.28s ease-out both; }
+main { animation: page-in 0.28s ease-out backwards; }
 @keyframes page-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }

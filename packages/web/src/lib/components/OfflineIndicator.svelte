@@ -65,44 +65,29 @@
   }
 </script>
 
-<div class="flex items-center gap-1 shrink-0">
-  <span
-    class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full"
-    style="background: {$syncStatus.online ? 'var(--color-accent-light)' : '#f59e0b'}; color: {$syncStatus.online ? 'var(--color-accent-text)' : 'white'};"
-    title="Last synced {lastSyncedLabel}"
-  >
-    <span
-      class="w-2 h-2 rounded-full shrink-0"
-      style="background: {$syncStatus.online ? 'var(--color-accent)' : '#fff'}"
-    ></span>
-    {#if !$syncStatus.online}
-      Offline{#if $syncStatus.pending > 0}<span class="hidden sm:inline">&nbsp;· {$syncStatus.pending} pending</span>{/if}
-    {:else if $syncStatus.pending > 0}
-      Online<span class="hidden sm:inline">&nbsp;· {$syncStatus.pending} pending</span>
-    {:else}
-      Online<span class="hidden sm:inline">&nbsp;· synced {lastSyncedLabel}</span>
-    {/if}
-  </span>
-  {#if $syncStatus.failed > 0}
-    <button
-      onclick={openFailed}
-      class="text-xs px-2 py-1 rounded-full"
-      style="background: #dc2626; color: white;"
-      aria-label="{$syncStatus.failed} change{$syncStatus.failed === 1 ? '' : 's'} could not be saved"
-      title="Some offline changes were rejected by the server"
-    >⚠ {$syncStatus.failed}</button>
-  {/if}
+<!-- Header chip: hidden while everything is healthy; shown only when offline,
+     syncing pending changes, or when the server rejected something. Full status
+     and a manual "Sync now" live in the avatar menu. -->
+{#if $syncStatus.failed > 0}
+  <button
+    onclick={openFailed}
+    class="text-xs font-medium px-2.5 py-1 rounded-full shrink-0"
+    style="background: #dc2626; color: white;"
+    aria-label="{$syncStatus.failed} change{$syncStatus.failed === 1 ? '' : 's'} could not be saved"
+    title="Some offline changes were rejected by the server"
+  >⚠ {$syncStatus.failed}</button>
+{:else if !$syncStatus.online || $syncStatus.pending > 0 || $syncStatus.syncing}
   <button
     onclick={syncNow}
     disabled={$syncStatus.syncing}
-    class="text-xs px-2 py-1 rounded-full transition-opacity disabled:opacity-60"
-    style="background: var(--color-accent-light); color: var(--color-accent-text);"
-    title="Sync now"
-    aria-label="Sync now"
+    class="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full shrink-0 disabled:opacity-80"
+    style="background: {$syncStatus.online ? 'var(--color-accent-light)' : '#f59e0b'}; color: {$syncStatus.online ? 'var(--color-accent-text)' : 'white'};"
+    title="Last synced {lastSyncedLabel} - tap to sync now"
   >
-    {$syncStatus.syncing ? '🔄' : '↻'}
+    <span class="w-2 h-2 rounded-full shrink-0 {$syncStatus.syncing ? 'animate-pulse' : ''}" style="background: {$syncStatus.online ? 'var(--color-accent)' : '#fff'}"></span>
+    {#if !$syncStatus.online}Offline{#if $syncStatus.pending > 0}<span class="hidden sm:inline">&nbsp;· {$syncStatus.pending} pending</span>{/if}{:else if $syncStatus.syncing}Syncing…{:else}{$syncStatus.pending} pending{/if}
   </button>
-</div>
+{/if}
 
 {#if showFailed}
   <Modal

@@ -64,7 +64,7 @@
 </style>
 
 <div
-  class="fixed inset-0 z-50 flex bg-black/50 backdrop-blur-sm print:hidden modal-backdrop {variant === 'sheet' ? 'flex-col justify-end' : 'items-end sm:items-center justify-center p-4'}"
+  class="fixed inset-0 z-50 flex bg-black/50 backdrop-blur-sm print:hidden modal-backdrop {variant === 'sheet' ? 'flex-col justify-end' : 'items-center justify-center p-4'}"
   onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
   onkeydown={onkeydown}
   role="presentation"

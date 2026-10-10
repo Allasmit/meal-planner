@@ -84,7 +84,31 @@
     loadWeek();
   }
 
+  function pickWeek(value: string) {
+    if (!value) return;
+    weekStart = getWeekStart(new Date(`${value}T00:00:00`));
+    loadWeek();
+  }
+
+  const isCurrentWeek = $derived(toDateString(weekStart) === toDateString(getWeekStart()));
+
+  // "More" overflow menu (Print / Clear week)
+  let moreOpen = $state(false);
+  let moreRoot = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    if (!moreOpen) return;
+    const onDown = (e: PointerEvent) => { if (moreRoot && !moreRoot.contains(e.target as Node)) moreOpen = false; };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') moreOpen = false; };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  });
+
   function printWeek() {
+    moreOpen = false;
     window.print();
   }
 
@@ -92,6 +116,36 @@
     pickerDate = date;
     pickerSlot = slot;
     pickerOpen = true;
+  }
+
+  // ─── Custom (free-text) dish ───────────────────────────────────────────────
+  let customOpen = $state(false);
+  let customName = $state('');
+  let customError = $state('');
+  let customSaving = $state(false);
+
+  function openCustom(date: string, slot: string) {
+    pickerDate = date;
+    pickerSlot = slot;
+    customName = '';
+    customError = '';
+    customOpen = true;
+  }
+
+  async function addCustom() {
+    const name = customName.trim();
+    if (!name) { customError = 'Enter a name for the dish'; return; }
+    customSaving = true;
+    customError = '';
+    try {
+      await api.addPlanEntry(pickerDate, pickerSlot, { customName: name });
+      customOpen = false;
+      await loadWeek(true);
+    } catch (e: any) {
+      customError = e?.message ?? 'Could not save that dish';
+    } finally {
+      customSaving = false;
+    }
   }
 
   async function assignMeal(meal: Meal) {
@@ -152,7 +206,8 @@
   const WEEK_DWELL_MS = 600; // hold over an edge arrow this long to change week
   const WEEK_REPEAT_MS = 900; // and keep holding to keep going
 
-  const plansFor = (date: string, slot: string) => (planMap.get(`${date}::${slot}`) ?? []).filter((p) => p.mealName);
+  const plansFor = (date: string, slot: string) => (planMap.get(`${date}::${slot}`) ?? []).filter((p) => p.mealName || p.customName);
+  const entryName = (p: MealPlan) => p.mealName ?? p.customName ?? '';
 
   /** Move a planned dish to another slot; it joins whatever is already planned there. */
   async function moveEntry(entry: MealPlan, to: SlotRef) {
@@ -174,7 +229,7 @@
   /** Long press (touch) or a short drag (mouse) on a planned meal picks it up; releasing over a slot drops it there. */
   function startPress(e: PointerEvent, entry: MealPlan) {
     if (e.button !== 0) return;
-    const label = entry.mealName ?? '';
+    const label = entryName(entry);
     const sourceEl = e.currentTarget as HTMLElement;
     const startX = e.clientX, startY = e.clientY;
     const isMouse = e.pointerType === 'mouse';
@@ -304,36 +359,65 @@
     </div>
   </div>
 
-  <div class="flex items-center justify-between mb-4 gap-2 print:hidden">
-    <button onclick={prevWeek} aria-label="Previous week" class="p-2 rounded-lg transition-colors hover:opacity-70" style="color: var(--color-text-muted)">◀</button>
-    <div class="text-center">
-      <div class="font-semibold" style="color: var(--color-text)">{weekLabel}</div>
-      <button onclick={goToday} class="text-xs hover:underline" style="color: var(--color-accent)">Today</button>
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-5 print:hidden">
+    <!-- Week navigator: ‹ [ date range / tap to jump ] › + Today -->
+    <div class="flex items-center gap-2 w-full sm:w-auto">
+      <div class="flex items-center flex-1 sm:flex-none rounded-xl shadow-sm" style="background: var(--color-surface); border: 1px solid var(--color-border)">
+        <button onclick={prevWeek} aria-label="Previous week" class="w-10 h-10 flex items-center justify-center rounded-l-xl hover:bg-black/5 dark:hover:bg-white/10" style="color: var(--color-text-muted)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+        </button>
+        <label class="relative flex-1 sm:min-w-52 h-10 px-3 flex items-center justify-center gap-2 text-sm font-semibold cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 border-x" style="border-color: var(--color-border); color: var(--color-text)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--color-accent)"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" /></svg>
+          <span class="truncate">{weekLabel}</span>
+          <input
+            type="date"
+            value={toDateString(weekStart)}
+            onchange={(e) => pickWeek(e.currentTarget.value)}
+            aria-label="Jump to week containing date"
+            class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+        </label>
+        <button onclick={nextWeek} aria-label="Next week" class="w-10 h-10 flex items-center justify-center rounded-r-xl hover:bg-black/5 dark:hover:bg-white/10" style="color: var(--color-text-muted)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+        </button>
+      </div>
+      {#if !isCurrentWeek}
+        <button onclick={goToday} class="h-10 px-3.5 rounded-xl text-sm font-semibold shrink-0" style="background: var(--color-accent-light); color: var(--color-accent-text)">Today</button>
+      {/if}
     </div>
-    <button onclick={nextWeek} aria-label="Next week" class="p-2 rounded-lg transition-colors hover:opacity-70" style="color: var(--color-text-muted)">▶</button>
-    <div class="flex items-center gap-2">
-      <button
-        onclick={printWeek}
-        class="text-sm font-semibold px-3 py-1.5 rounded-xl border transition-colors"
-        style="border-color: var(--color-border); color: var(--color-text); background: var(--color-surface)"
-      >
-        Print / PDF
-      </button>
-      <button
-        onclick={clearWeek}
-        disabled={clearing || loading || planMap.size === 0}
-        class="text-sm font-semibold px-3 py-1.5 rounded-xl border transition-colors disabled:opacity-50"
-        style="border-color: var(--color-border); color: var(--color-danger); background: var(--color-surface)"
-      >
-        {clearing ? 'Clearing…' : 'Clear week'}
-      </button>
+
+    <!-- Actions: one primary button + overflow menu -->
+    <div class="flex items-center gap-2 w-full sm:w-auto">
       <button
         onclick={() => { autoOpen = true; autoError = ''; autoResult = null; }}
-        class="text-sm font-semibold text-white px-3 py-1.5 rounded-xl shadow-sm transition-colors"
-        style="background: var(--color-accent)"
-      >
-        ✨ Auto
-      </button>
+        class="flex-1 sm:flex-none h-10 px-5 rounded-xl text-sm font-semibold text-white shadow-sm"
+        style="background: linear-gradient(135deg, var(--color-accent), var(--color-accent-hover))"
+      >✨ Auto-plan week</button>
+
+      <div class="relative" bind:this={moreRoot}>
+        <button
+          onclick={() => (moreOpen = !moreOpen)}
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          aria-label="More actions"
+          class="w-10 h-10 rounded-xl flex items-center justify-center shadow-sm"
+          style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text)"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
+        </button>
+        {#if moreOpen}
+          <div role="menu" class="absolute right-0 mt-2 w-48 rounded-2xl shadow-lg p-1.5 z-30" style="background: var(--color-surface); border: 1px solid var(--color-border)">
+            <button role="menuitem" onclick={printWeek} class="w-full text-left text-sm px-3 py-2.5 rounded-xl hover:bg-black/5 dark:hover:bg-white/10" style="color: var(--color-text)">🖨️ Print / PDF</button>
+            <button
+              role="menuitem"
+              onclick={() => { moreOpen = false; clearWeek(); }}
+              disabled={clearing || loading || planMap.size === 0}
+              class="w-full text-left text-sm px-3 py-2.5 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-50"
+              style="color: var(--color-danger)"
+            >{clearing ? 'Clearing…' : '🗑️ Clear week'}</button>
+          </div>
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -398,24 +482,38 @@
                         role="presentation"
                         style="background: var(--color-accent-light); border: 1px solid var(--color-accent); opacity: {isDragging(plan.id) ? 0.4 : 1}; -webkit-touch-callout: none"
                       >
-                        <a href="/meals/{plan.mealId}" class="block" draggable="false" ondragstart={(e) => e.preventDefault()}>
-                          <div class="font-medium text-xs leading-tight pr-8" style="color: var(--color-accent-text)">{plan.mealName}{plan._pendingSync ? ' ⏳' : ''}</div>
-                          {#if plan.mealDifficulty}
-                            <span class="inline-block text-xs px-1.5 py-0.5 rounded mt-1 {DIFFICULTY_COLORS[plan.mealDifficulty]}">{plan.mealDifficulty}</span>
-                          {/if}
-                        </a>
+                        {#if plan.mealId}
+                          <a href="/meals/{plan.mealId}" class="block" draggable="false" ondragstart={(e) => e.preventDefault()}>
+                            <div class="font-medium text-xs leading-tight pr-8" style="color: var(--color-accent-text)">{entryName(plan)}{plan._pendingSync ? ' ⏳' : ''}</div>
+                            {#if plan.mealDifficulty}
+                              <span class="inline-block text-xs px-1.5 py-0.5 rounded mt-1 {DIFFICULTY_COLORS[plan.mealDifficulty]}">{plan.mealDifficulty}</span>
+                            {/if}
+                          </a>
+                        {:else}
+                          <div class="font-medium text-xs leading-tight pr-8" style="color: var(--color-accent-text)">✏️ {entryName(plan)}{plan._pendingSync ? ' ⏳' : ''}</div>
+                        {/if}
                         <div class="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity print:hidden">
                           <span class="text-sm leading-none p-0.5 cursor-grab" style="color: var(--color-accent)" title="Press and hold to move" aria-hidden="true">⠿</span>
-                          <button onclick={() => removeEntry(plan.id)} class="text-xs p-0.5" style="color: var(--color-text-muted)" title="Remove" aria-label="Remove {plan.mealName}">✕</button>
+                          <button onclick={() => removeEntry(plan.id)} class="text-xs p-0.5" style="color: var(--color-text-muted)" title="Remove" aria-label="Remove {entryName(plan)}">✕</button>
                         </div>
                       </div>
                     {/each}
-                    <button onclick={() => openPicker(dateStr, slot)}
-                      class="w-full border-2 border-dashed rounded-lg transition-colors print:hidden {plans.length ? 'h-6 text-sm' : 'h-14 text-xl'}"
-                      aria-label="{plans.length ? 'Add another dish to' : 'Add'} {SLOT_LABELS[slot]} on {formatDayShort(day)}"
-                      style="border-color: {hovered ? 'var(--color-accent)' : 'var(--color-border)'}; color: var(--color-text-muted)">
-                      +
-                    </button>
+                    <div class="flex gap-1 print:hidden">
+                      <button onclick={() => openPicker(dateStr, slot)}
+                        class="flex-1 border-2 border-dashed rounded-lg transition-colors {plans.length ? 'h-6 text-sm' : 'h-14 text-xl'}"
+                        title="Add meal/dish"
+                        aria-label="{plans.length ? 'Add another meal/dish to' : 'Add meal/dish to'} {SLOT_LABELS[slot]} on {formatDayShort(day)}"
+                        style="border-color: {hovered ? 'var(--color-accent)' : 'var(--color-border)'}; color: var(--color-text-muted)">
+                        +
+                      </button>
+                      <button onclick={() => openCustom(dateStr, slot)}
+                        class="border-2 border-dashed rounded-lg transition-colors {plans.length ? 'h-6 w-6 text-xs' : 'h-14 w-9 text-base'}"
+                        title="Add own dish"
+                        aria-label="Add own dish to {SLOT_LABELS[slot]} on {formatDayShort(day)}"
+                        style="border-color: var(--color-accent); color: var(--color-accent)">
+                        +
+                      </button>
+                    </div>
                   </div>
                 </td>
               {/each}
@@ -450,12 +548,19 @@
                       role="presentation"
                       style="opacity: {isDragging(plan.id) ? 0.4 : 1}; -webkit-touch-callout: none"
                     >
-                      <a href="/meals/{plan.mealId}" class="flex-1 text-sm font-medium" style="color: var(--color-accent-text)">{plan.mealName}{plan._pendingSync ? ' ⏳' : ''}</a>
+                      {#if plan.mealId}
+                        <a href="/meals/{plan.mealId}" class="flex-1 text-sm font-medium" style="color: var(--color-accent-text)">{entryName(plan)}{plan._pendingSync ? ' ⏳' : ''}</a>
+                      {:else}
+                        <span class="flex-1 text-sm font-medium" style="color: var(--color-accent-text)">✏️ {entryName(plan)}{plan._pendingSync ? ' ⏳' : ''}</span>
+                      {/if}
                       <span class="text-base p-1" style="color: var(--color-text-muted)" title="Press and hold to move" aria-hidden="true">⠿</span>
-                      <button onclick={() => removeEntry(plan.id)} class="text-sm p-1" style="color: var(--color-text-muted)" aria-label="Remove {plan.mealName}">✕</button>
+                      <button onclick={() => removeEntry(plan.id)} class="text-sm p-1" style="color: var(--color-text-muted)" aria-label="Remove {entryName(plan)}">✕</button>
                     </div>
                   {/each}
-                  <button onclick={() => openPicker(dateStr, slot)} class="text-sm text-left" style="color: var(--color-text-muted)">{plans.length ? '+ Add another dish' : '+ Add meal'}</button>
+                  <div class="flex flex-wrap gap-x-4 gap-y-1">
+                    <button onclick={() => openPicker(dateStr, slot)} class="text-sm text-left" style="color: var(--color-text-muted)">{plans.length ? '+ Add another meal/dish' : '+ Add meal/dish'}</button>
+                    <button onclick={() => openCustom(dateStr, slot)} class="text-sm text-left" style="color: var(--color-accent)">+ Add own</button>
+                  </div>
                 </div>
               </div>
             {/each}
@@ -482,6 +587,42 @@
       aria-hidden="true"
     >{icon}</div>
   {/each}
+{/if}
+
+{#if customOpen}
+  <Modal
+    label="Add a custom dish to {SLOT_LABELS[pickerSlot]} on {pickerDate}"
+    onclose={() => customOpen = false}
+    panelClass="w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4"
+    panelStyle="background: var(--color-surface); color: var(--color-text)"
+  >
+    <form onsubmit={(e) => { e.preventDefault(); addCustom(); }} class="space-y-4">
+      <div>
+        <div class="font-bold text-base">Custom dish</div>
+        <div class="text-xs" style="color: var(--color-text-muted)">{pickerDate} · {SLOT_LABELS[pickerSlot]}</div>
+      </div>
+      <div>
+        <label for="custom-dish-name" class="text-sm font-medium block mb-1" style="color: var(--color-text-muted)">What are you having?</label>
+        <input
+          id="custom-dish-name"
+          type="text"
+          bind:value={customName}
+          maxlength="120"
+          placeholder="e.g. Takeaway pizza, Leftovers, Dinner out"
+          class="w-full border rounded-xl px-3.5 py-2.5 text-sm"
+          style="background: var(--color-bg); border-color: var(--color-border); color: var(--color-text)"
+        />
+        <p class="text-xs mt-1.5" style="color: var(--color-text-muted)">Custom dishes show on the planner but are not added to the shopping list or costs.</p>
+      </div>
+      {#if customError}
+        <div class="text-sm rounded-lg p-2" style="background: var(--color-danger-light); color: var(--color-danger)">{customError}</div>
+      {/if}
+      <div class="flex gap-2">
+        <button type="submit" disabled={customSaving} class="flex-1 h-10 rounded-xl text-sm font-semibold text-white disabled:opacity-60" style="background: var(--color-accent)">{customSaving ? 'Adding…' : 'Add dish'}</button>
+        <button type="button" onclick={() => customOpen = false} class="px-4 h-10 rounded-xl text-sm border" style="border-color: var(--color-border); color: var(--color-text-muted)">Cancel</button>
+      </div>
+    </form>
+  </Modal>
 {/if}
 
 {#if pickerOpen}
