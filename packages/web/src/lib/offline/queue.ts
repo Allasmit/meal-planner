@@ -16,12 +16,27 @@ export interface QueuedMutation {
   error?: string;
 }
 
+/** Random unique id. `crypto.randomUUID()` only exists on secure (HTTPS/localhost) pages in recent
+ * browsers - on a plain-HTTP home-server address or an older phone it is missing and every offline
+ * change failed with "crypto.randomUUID is not a function" - so fall back to getRandomValues,
+ * which is available everywhere. */
+export function randomId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // RFC 4122 version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 // Every change is its own IndexedDB record, so two changes made at the same moment can never
 // overwrite each other the way a read-modify-write of one shared array could.
 let counter = 0;
 function newKey(): string {
   counter = (counter + 1) % 1_000_000;
-  return `${ITEM_PREFIX}${Date.now().toString().padStart(15, '0')}-${counter.toString().padStart(6, '0')}-${crypto.randomUUID()}`;
+  return `${ITEM_PREFIX}${Date.now().toString().padStart(15, '0')}-${counter.toString().padStart(6, '0')}-${randomId()}`;
 }
 
 /** Converts the single-array queue used by older versions into per-item records (once). */
@@ -61,7 +76,7 @@ export async function getFailed(): Promise<QueuedMutation[]> {
 }
 
 export async function enqueueMutation(method: string, path: string, body?: string, tempId?: number): Promise<QueuedMutation> {
-  const item: QueuedMutation = { id: crypto.randomUUID(), method, path, body, createdAt: Date.now(), tempId, status: 'pending' };
+  const item: QueuedMutation = { id: randomId(), method, path, body, createdAt: Date.now(), tempId, status: 'pending' };
   await set(newKey(), item);
   return item;
 }

@@ -49,6 +49,21 @@ describe('queue', () => {
 		expect(await getQueue()).toHaveLength(1); // migrated once, not duplicated
 	});
 
+	it('queues changes on pages without crypto.randomUUID (plain HTTP, older phones)', async () => {
+		const original = crypto.randomUUID;
+		Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true });
+		try {
+			await enqueueMutation('POST', '/planner/2026-10-05/dinner', '{"mealId":1}', -1);
+			await enqueueMutation('DELETE', '/meals/2');
+			const queue = await getQueue();
+			expect(queue).toHaveLength(2);
+			expect(queue[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+			expect(queue[0].id).not.toBe(queue[1].id);
+		} finally {
+			Object.defineProperty(crypto, 'randomUUID', { value: original, configurable: true });
+		}
+	});
+
 	it('replaces temporary ids only where they stand alone', () => {
 		expect(replaceTempId('/meals/-1234', -1234, 55)).toBe('/meals/55');
 		expect(replaceTempId('{"mealId":-1234,"servings":2}', -1234, 55)).toBe('{"mealId":55,"servings":2}');

@@ -10,3 +10,6 @@ build/
 .env.local
 .env.*.local
 packages/api/data/
+
+# Personal Claude Code settings
+.claude/settings.local.json
