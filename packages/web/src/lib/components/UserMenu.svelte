@@ -3,6 +3,8 @@
   import { auth, isAdmin } from '$lib/stores/auth';
   import { syncStatus, flushQueue, pingServer } from '$lib/offline/sync';
   import { logout } from '$lib/session';
+  import { installState, promptInstall } from '$lib/pwa-install';
+  import Modal from './Modal.svelte';
 
   type Props = { darkMode: boolean; ontoggledark: () => void };
   let { darkMode, ontoggledark }: Props = $props();
@@ -44,11 +46,21 @@
 
   function syncNow() { pingServer(); flushQueue(); }
 
+  const showInstall = $derived(!$installState.installed && ($installState.canPrompt || $installState.ios));
+  let showIosHelp = $state(false);
+
+  function install() {
+    open = false;
+    if ($installState.canPrompt) promptInstall();
+    else showIosHelp = true;
+  }
+
   const attention = $derived(!$syncStatus.online || $syncStatus.failed > 0);
 
   const GEAR = 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z';
   const SYNC = 'M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16M16 16h5v5';
-  const OUT = 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9';
+  const INSTALL = 'M12 3v12M7 10l5 5 5-5M5 21h14';
+  const OUT ='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9';
   const MOON = 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z';
   const SUN = 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42';
 </script>
@@ -100,6 +112,16 @@
         </span>
       </button>
 
+      {#if showInstall}
+        <button role="menuitem" onclick={install} class="item">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={INSTALL} /></svg>
+          <span class="flex-1 text-left">
+            Install app
+            <span class="block text-xs" style="color: var(--color-text-muted)">Add to home screen, works offline</span>
+          </span>
+        </button>
+      {/if}
+
       <a role="menuitem" href="/settings" class="item">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={GEAR} /></svg>
         <span class="flex-1 text-left">Settings</span>
@@ -114,6 +136,29 @@
     </div>
   {/if}
 </div>
+
+{#if showIosHelp}
+  <Modal
+    label="Install Meal Planner"
+    onclose={() => (showIosHelp = false)}
+    variant="sheet"
+    panelClass="w-full rounded-t-2xl p-5 shadow-2xl space-y-4"
+    panelStyle="background: var(--color-surface); color: var(--color-text); padding-bottom: max(1.25rem, env(safe-area-inset-bottom))"
+  >
+    <div class="flex items-center justify-between">
+      <h2 class="font-bold text-base">Install Meal Planner</h2>
+      <button onclick={() => (showIosHelp = false)} class="text-xl leading-none p-1" style="color: var(--color-text-muted)" aria-label="Close">✕</button>
+    </div>
+    <ol class="text-sm space-y-3 list-decimal pl-5">
+      <li>
+        In Safari, tap the <strong>Share</strong> button
+        <svg class="inline w-4 h-4 -mt-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13" /></svg>
+      </li>
+      <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+      <li>Tap <strong>Add</strong>. The app then opens full screen from its icon and works offline.</li>
+    </ol>
+  </Modal>
+{/if}
 
 <style>
   .menu { animation: menu-in 0.14s ease-out both; transform-origin: top right; }

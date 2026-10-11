@@ -64,6 +64,15 @@
 
 html { -webkit-tap-highlight-color: transparent; }
 
+/* Installed app (home-screen icon): behave like a native app rather than a web page. No
+   rubber-band/pull-to-refresh reloads, no long-press text selection or callouts on controls, and
+   no double-tap zoom delay. */
+@media (display-mode: standalone) {
+  html, body { overscroll-behavior-y: none; }
+  nav, header, button, a { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+a, button, input, select, textarea, label { touch-action: manipulation; }
+
 body {
   background-color: var(--color-bg);
   color: var(--color-text);

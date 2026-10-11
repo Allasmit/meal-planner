@@ -9,6 +9,7 @@
   import { getCachedGet } from '$lib/offline/cache';
   import type { User } from '$lib/types';
   import { runFullPrecache } from '$lib/offline/precache';
+  import { initInstall } from '$lib/pwa-install';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import UserMenu from '$lib/components/UserMenu.svelte';
   import { onMount } from 'svelte';
@@ -22,6 +23,7 @@
   let darkMode = $state(false);
 
   onMount(async () => {
+    initInstall();
     darkMode = localStorage.getItem('darkMode') === 'true';
     applyDarkMode(darkMode);
     initSync();
@@ -95,6 +97,8 @@
     } else {
       document.documentElement.classList.remove('dark');
     }
+    // Colour the phone's status bar like the header, as a native app would.
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', on ? '#0c1311' : '#ffffff');
   }
 
   $effect(() => {

@@ -30,19 +30,33 @@ export default defineConfig({
 			// can't make the dev build work offline - it only served stale pages. Test offline mode with
 			// a production build (`pnpm build && pnpm start`).
 			devOptions: { enabled: false },
+			// The icons are already precached by globPatterns below.
+			includeManifestIcons: false,
+			// Icons are rendered from static/icons/icon.svg by scripts/generate-icons.cjs.
 			manifest: {
+				id: '/',
 				name: 'Meal Planner',
 				short_name: 'Meals',
 				description: 'Weekly household meal planning app',
 				theme_color: '#12875c',
-				background_color: '#ffffff',
+				background_color: '#12875c',
 				display: 'standalone',
+				display_override: ['standalone', 'minimal-ui'],
 				orientation: 'portrait',
 				scope: '/',
 				start_url: '/planner',
+				categories: ['food', 'lifestyle', 'productivity'],
 				icons: [
-					{ src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-					{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+					{ src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+					{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+					// The artwork sits inside the central safe zone, so the same file works as maskable.
+					{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+				],
+				// Long-press shortcuts on the home-screen icon.
+				shortcuts: [
+					{ name: 'Planner', url: '/planner', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
+					{ name: 'Shopping list', short_name: 'Shopping', url: '/shopping-list', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
+					{ name: 'Meals', url: '/meals', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
 				],
 			},
 			// Our own service worker (src/pwa/sw.ts), so page navigations can be served from the app
