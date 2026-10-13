@@ -63,6 +63,7 @@ async function precacheReferenceData(): Promise<void> {
 		api.getFamilyMembers(),
 		api.getPlannerRules(),
 		api.getPlannerSettings(),
+		api.getLeftovers(),
 		...weeks.flatMap((week) => [api.getWeekPlan(week), api.getShoppingList(week), api.getCostSummary(week)]),
 	]);
 }

@@ -86,6 +86,12 @@ export interface MealPlan {
   notes: string | null;
   /** Free-text dish with no recipe (mealId is null). */
   customName: string | null;
+  /** Portions left over after this dish was eaten (0 = none recorded). */
+  leftoverPortions: number;
+  /** Leftover portions not yet planned into another slot. */
+  leftoverRemaining: number;
+  /** Set when this entry is the leftovers of another planned dish (that dish's id). */
+  leftoverFromId: number | null;
   assignedByUserId: number | null;
   mealName: string | null;
   mealPrepTime: number | null;

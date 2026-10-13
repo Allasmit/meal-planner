@@ -123,6 +123,10 @@ export const mealPlans = sqliteTable(
     /** Free-text dish with no recipe behind it (mealId is null). */
     customName: text('custom_name'),
     leftoversRequired: integer('leftovers_required', { mode: 'boolean' }).notNull().default(false),
+    /** Portions left over after this dish was eaten (0 = none recorded). */
+    leftoverPortions: integer('leftover_portions').notNull().default(0),
+    /** Set when this entry is eating the leftovers of another planned dish. No FK: it stays leftovers if that dish is removed. */
+    leftoverFromId: integer('leftover_from_id'),
     prepTimeLimitMinutes: integer('prep_time_limit_minutes'),
     assignedByUserId: integer('assigned_by_user_id').references(() => users.id),
     updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),

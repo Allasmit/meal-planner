@@ -3,7 +3,8 @@ import { createRouter } from '../lib/router';
 import { parseId } from '../lib/params';
 import { aggregateShoppingList, type ShoppingCategory } from '../lib/shopping';
 import { sqliteNow } from '../lib/sqlite';
-import { eq, and, between, inArray, ne } from 'drizzle-orm';
+import { portionsToPlace } from '../lib/leftovers';
+import { eq, and, between, inArray, ne, gt, isNull, sum, asc } from 'drizzle-orm';
 import { db } from '../db/client';
 import { mealPlans, meals, mealIngredients, ingredients, ingredientCategories, users, weeklyRules, userSettings, mealSuitableFor, mealPreferredBy } from '../db/schema';
 import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/auth';
@@ -28,6 +29,53 @@ function withCustomDishes(categories: ShoppingCategory[], dishes: { id: number; 
   ];
 }
 
+// Columns returned for a planned dish (week view and leftovers list).
+const planColumns = {
+  id: mealPlans.id,
+  planDate: mealPlans.planDate,
+  mealSlot: mealPlans.mealSlot,
+  mealId: mealPlans.mealId,
+  servings: mealPlans.servings,
+  notes: mealPlans.notes,
+  customName: mealPlans.customName,
+  leftoverPortions: mealPlans.leftoverPortions,
+  leftoverFromId: mealPlans.leftoverFromId,
+  assignedByUserId: mealPlans.assignedByUserId,
+  mealName: meals.name,
+  mealPrepTime: meals.prepTimeMinutes,
+  mealCookTime: meals.cookTimeMinutes,
+  mealDifficulty: meals.difficulty,
+  assignedByDisplayName: users.displayName,
+};
+
+/** How many leftover portions of each dish are already planned elsewhere (each entry's servings), keyed by the dish's id. */
+async function leftoverPortionsUsed(sourceIds: number[]): Promise<Map<number, number>> {
+  if (sourceIds.length === 0) return new Map();
+  const rows = await db
+    .select({ fromId: mealPlans.leftoverFromId, used: sum(mealPlans.servings) })
+    .from(mealPlans)
+    .where(inArray(mealPlans.leftoverFromId, sourceIds))
+    .groupBy(mealPlans.leftoverFromId);
+  return new Map(rows.map((r) => [r.fromId!, Number(r.used ?? 0)]));
+}
+
+async function withLeftoverRemaining<T extends { id: number; leftoverPortions: number }>(rows: T[]) {
+  const used = await leftoverPortionsUsed(rows.filter((r) => r.leftoverPortions > 0).map((r) => r.id));
+  return rows.map((r) => ({ ...r, leftoverRemaining: Math.max(0, r.leftoverPortions - (used.get(r.id) ?? 0)) }));
+}
+
+// GET /api/planner/leftovers — every planned dish that still has leftover portions not yet planned
+plannerRouter.get('/leftovers', async (_req: AuthRequest, res: Response): Promise<void> => {
+  const rows = await db
+    .select(planColumns)
+    .from(mealPlans)
+    .leftJoin(meals, eq(mealPlans.mealId, meals.id))
+    .leftJoin(users, eq(mealPlans.assignedByUserId, users.id))
+    .where(gt(mealPlans.leftoverPortions, 0))
+    .orderBy(asc(mealPlans.planDate), asc(mealPlans.id));
+  res.json((await withLeftoverRemaining(rows)).filter((r) => r.leftoverRemaining > 0));
+});
+
 // GET /api/planner/shopping-list — must be before /:date/:slot to avoid param collision
 plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Promise<void> => {
   const weekStart = req.query.weekStart as string | undefined;
@@ -46,7 +94,8 @@ plannerRouter.get('/shopping-list', async (req: AuthRequest, res: Response): Pro
   const plans = await db
     .select({ id: mealPlans.id, mealId: mealPlans.mealId, servings: mealPlans.servings, customName: mealPlans.customName })
     .from(mealPlans)
-    .where(between(mealPlans.planDate, weekStart, weekEnd))
+    // Leftovers are already cooked: nothing to buy for them.
+    .where(and(between(mealPlans.planDate, weekStart, weekEnd), isNull(mealPlans.leftoverFromId)))
     .orderBy(mealPlans.id);
 
   // Own dishes have no ingredients: they go on the list exactly as they were entered.
@@ -101,27 +150,13 @@ plannerRouter.get('/', async (req: AuthRequest, res: Response): Promise<void> =>
     .slice(0, 10);
 
   const result = await db
-    .select({
-      id: mealPlans.id,
-      planDate: mealPlans.planDate,
-      mealSlot: mealPlans.mealSlot,
-      mealId: mealPlans.mealId,
-      servings: mealPlans.servings,
-      notes: mealPlans.notes,
-      customName: mealPlans.customName,
-      assignedByUserId: mealPlans.assignedByUserId,
-      mealName: meals.name,
-      mealPrepTime: meals.prepTimeMinutes,
-      mealCookTime: meals.cookTimeMinutes,
-      mealDifficulty: meals.difficulty,
-      assignedByDisplayName: users.displayName,
-    })
+    .select(planColumns)
     .from(mealPlans)
     .leftJoin(meals, eq(mealPlans.mealId, meals.id))
     .leftJoin(users, eq(mealPlans.assignedByUserId, users.id))
     .where(between(mealPlans.planDate, weekStart, weekEnd));
 
-  res.json(result);
+  res.json(await withLeftoverRemaining(result));
 });
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -138,8 +173,11 @@ plannerRouter.post('/:date/:slot', async (req: AuthRequest, res: Response): Prom
     .object({
       mealId: z.number().int().optional(),
       customName: z.string().trim().min(1).max(120).optional(),
-      servings: z.number().int().min(1).default(2),
+      /** For leftovers: the portions placed, all that remain when left out. */
+      servings: z.number().int().min(1).optional(),
       notes: z.string().optional().nullable(),
+      /** The planned dish whose leftovers this entry uses up. */
+      leftoverFromId: z.number().int().optional(),
     })
     .refine((v) => (v.mealId === undefined) !== (v.customName === undefined), {
       message: 'Provide either mealId or customName',
@@ -153,6 +191,20 @@ plannerRouter.post('/:date/:slot', async (req: AuthRequest, res: Response): Prom
     if (!meal) { res.status(404).json({ error: 'Meal not found' }); return; }
   }
 
+  let servings = parsed.data.servings ?? 2;
+  if (parsed.data.leftoverFromId !== undefined) {
+    const [source] = await db
+      .select({ id: mealPlans.id, leftoverPortions: mealPlans.leftoverPortions })
+      .from(mealPlans)
+      .where(eq(mealPlans.id, parsed.data.leftoverFromId));
+    if (!source) { res.status(404).json({ error: 'That dish is no longer on the plan' }); return; }
+    const [{ leftoverRemaining }] = await withLeftoverRemaining([source]);
+    if (leftoverRemaining < 1) { res.status(409).json({ error: 'There are no leftovers of that dish left' }); return; }
+    const portions = portionsToPlace(parsed.data.servings, leftoverRemaining);
+    if (portions === null) { res.status(409).json({ error: `Only ${leftoverRemaining} leftover portion${leftoverRemaining === 1 ? '' : 's'} of that dish left` }); return; }
+    servings = portions;
+  }
+
   const [saved] = await db
     .insert(mealPlans)
     .values({
@@ -160,8 +212,9 @@ plannerRouter.post('/:date/:slot', async (req: AuthRequest, res: Response): Prom
       mealSlot: slot as (typeof VALID_SLOTS)[number],
       mealId: parsed.data.mealId ?? null,
       customName: parsed.data.customName ?? null,
-      servings: parsed.data.servings,
+      servings,
       notes: parsed.data.notes,
+      leftoverFromId: parsed.data.leftoverFromId ?? null,
       assignedByUserId: req.user!.userId,
     })
     .returning();
@@ -180,10 +233,31 @@ plannerRouter.put('/entry/:id', async (req: AuthRequest, res: Response): Promise
     customName: z.string().trim().min(1).max(120).optional(),
     servings: z.number().int().min(1).optional(),
     notes: z.string().optional().nullable(),
+    /** Portions left over after eating this dish; 0 clears it. */
+    leftoverPortions: z.number().int().min(0).max(99).optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
   if (Object.keys(parsed.data).length === 0) { res.status(400).json({ error: 'Nothing to update' }); return; }
+
+  // Leftovers can't take more portions than the dish has left (counting the ones this entry already holds).
+  if (parsed.data.servings !== undefined) {
+    const [entry] = await db
+      .select({ servings: mealPlans.servings, leftoverFromId: mealPlans.leftoverFromId })
+      .from(mealPlans)
+      .where(eq(mealPlans.id, id));
+    if (entry?.leftoverFromId != null) {
+      const [source] = await db
+        .select({ id: mealPlans.id, leftoverPortions: mealPlans.leftoverPortions })
+        .from(mealPlans)
+        .where(eq(mealPlans.id, entry.leftoverFromId));
+      const available = (source ? (await withLeftoverRemaining([source]))[0].leftoverRemaining : 0) + entry.servings;
+      if (portionsToPlace(parsed.data.servings, available) === null) {
+        res.status(409).json({ error: `Only ${available} leftover portion${available === 1 ? '' : 's'} of that dish available` });
+        return;
+      }
+    }
+  }
 
   const [updated] = await db
     .update(mealPlans)
@@ -293,7 +367,7 @@ plannerRouter.get('/cost-summary', async (req: AuthRequest, res: Response): Prom
       .select({ cost: meals.cost })
       .from(mealPlans)
       .innerJoin(meals, eq(mealPlans.mealId, meals.id))
-      .where(between(mealPlans.planDate, from, to));
+      .where(and(between(mealPlans.planDate, from, to), isNull(mealPlans.leftoverFromId)));
     return {
       total: Math.round(rows.reduce((sum, r) => sum + (r.cost ?? 0), 0) * 100) / 100,
       mealsWithoutCost: rows.filter((r) => r.cost === null).length,

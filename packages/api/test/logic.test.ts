@@ -5,6 +5,7 @@ import { toBaseMeasure, formatMeasure } from '../src/lib/units';
 import { parseCsv, normaliseName } from '../src/lib/csv';
 import { splitSqlStatements } from '../src/lib/sql';
 import { escapeLike, sqliteNow } from '../src/lib/sqlite';
+import { portionsToPlace } from '../src/lib/leftovers';
 
 const row = (over: Partial<ShoppingRow>): ShoppingRow => ({
   mealId: 1, ingredientId: 1, ingredientName: 'Onion', quantity: 1, unit: 'whole',
@@ -106,4 +107,16 @@ test('splitSqlStatements ignores ; and -- inside strings and comments', () => {
 test('escapeLike escapes wildcards; sqliteNow matches datetime() format', () => {
   assert.equal(escapeLike('50%_off\\'), '50\\%\\_off\\\\');
   assert.match(sqliteNow(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+});
+
+test('leftovers take every remaining portion unless fewer are asked for', () => {
+  assert.equal(portionsToPlace(undefined, 3), 3);
+  assert.equal(portionsToPlace(2, 3), 2);
+  assert.equal(portionsToPlace(3, 3), 3);
+});
+
+test('leftovers cannot take more portions than are left, or none', () => {
+  assert.equal(portionsToPlace(4, 3), null);
+  assert.equal(portionsToPlace(0, 3), null);
+  assert.equal(portionsToPlace(undefined, 0), null);
 });

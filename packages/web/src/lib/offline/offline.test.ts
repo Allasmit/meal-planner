@@ -193,6 +193,53 @@ describe('applyOptimisticPatch', () => {
 		expect(await getCachedGet<any[]>('/planner?weekStart=2026-10-05')).toHaveLength(0);
 		expect((await getCachedGet<any[]>('/planner?weekStart=2026-10-12'))![0]).toMatchObject({ id: -900, planDate: '2026-10-13', customName: 'Pizza' });
 	});
+
+	it('tracks leftovers offline: marking, planning a portion, and handing it back', async () => {
+		const lasagne = { id: 7, planDate: '2026-10-05', mealSlot: 'dinner', mealId: 3, mealName: 'Lasagne', customName: null, leftoverPortions: 0, leftoverRemaining: 0, leftoverFromId: null };
+		await setCachedGet('/planner?weekStart=2026-10-05', [lasagne]);
+		await setCachedGet('/planner/leftovers', []);
+		const leftovers = () => getCachedGet<any[]>('/planner/leftovers');
+
+		await applyOptimisticPatch('PUT', '/planner/entry/7', '{"leftoverPortions":2}');
+		expect(await leftovers()).toMatchObject([{ id: 7, leftoverRemaining: 2 }]);
+
+		await applyOptimisticPatch('POST', '/planner/2026-10-06/lunch', '{"mealId":3,"servings":1,"leftoverFromId":7}', -950);
+		expect(await leftovers()).toMatchObject([{ id: 7, leftoverRemaining: 1 }]);
+		const week = (await getCachedGet<any[]>('/planner?weekStart=2026-10-05'))!;
+		expect(week.find((p) => p.id === 7)).toMatchObject({ leftoverRemaining: 1 });
+		expect(week.find((p) => p.id === -950)).toMatchObject({ leftoverFromId: 7 });
+
+		await applyOptimisticPatch('POST', '/planner/2026-10-07/lunch', '{"mealId":3,"servings":1,"leftoverFromId":7}', -951);
+		expect(await leftovers()).toEqual([]); // all used up
+
+		await applyOptimisticPatch('DELETE', '/planner/entry/-951');
+		expect(await leftovers()).toMatchObject([{ id: 7, leftoverRemaining: 1 }]);
+
+		await applyOptimisticPatch('DELETE', '/planner/entry/7');
+		expect(await leftovers()).toEqual([]);
+	});
+
+	it('places several leftover portions at once, defaulting to all that remain', async () => {
+		const stew = { id: 8, planDate: '2026-10-05', mealSlot: 'dinner', mealId: 4, mealName: 'Stew', customName: null, servings: 4, leftoverPortions: 5, leftoverRemaining: 5, leftoverFromId: null };
+		await setCachedGet('/planner?weekStart=2026-10-05', [stew]);
+		await setCachedGet('/planner/leftovers', [stew]);
+		const leftovers = () => getCachedGet<any[]>('/planner/leftovers');
+		const week = async () => (await getCachedGet<any[]>('/planner?weekStart=2026-10-05'))!;
+
+		await applyOptimisticPatch('POST', '/planner/2026-10-06/lunch', '{"mealId":4,"servings":2,"leftoverFromId":8}', -960);
+		expect(await leftovers()).toMatchObject([{ id: 8, leftoverRemaining: 3 }]);
+
+		await applyOptimisticPatch('PUT', '/planner/entry/-960', '{"servings":3}');
+		expect(await leftovers()).toMatchObject([{ id: 8, leftoverRemaining: 2 }]);
+
+		await applyOptimisticPatch('POST', '/planner/2026-10-07/dinner', '{"mealId":4,"leftoverFromId":8}', -961);
+		expect((await week()).find((p) => p.id === -961)).toMatchObject({ servings: 2, leftoverFromId: 8 });
+		expect(await leftovers()).toEqual([]);
+
+		await applyOptimisticPatch('DELETE', '/planner/entry/-960');
+		expect(await leftovers()).toMatchObject([{ id: 8, leftoverRemaining: 3 }]);
+		expect((await week()).find((p) => p.id === 8)).toMatchObject({ leftoverRemaining: 3 });
+	});
 });
 
 describe('clearing a week offline', () => {

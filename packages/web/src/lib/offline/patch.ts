@@ -24,6 +24,46 @@ function weekContains(path: string, date: string | undefined): boolean {
 }
 
 const isWeekPlanPath = (path: string) => path.startsWith('/planner?');
+const LEFTOVERS_PATH = '/planner/leftovers';
+
+/** Keeps the cached leftovers list in step with a planned dish: listed while it has portions left, oldest first. */
+async function syncCachedLeftover(entry: any): Promise<void> {
+  const list = await getCachedGet<any[]>(LEFTOVERS_PATH);
+  if (!Array.isArray(list)) return;
+  const next = list.filter((p) => p?.id !== entry.id);
+  if (entry.leftoverRemaining > 0) next.push(entry);
+  next.sort((a, b) => (a.planDate < b.planDate ? -1 : a.planDate > b.planDate ? 1 : a.id - b.id));
+  await setCachedGet(LEFTOVERS_PATH, next);
+}
+
+/** Leftover portions of dish `sourceId` were planned (negative delta) or handed back (positive delta). */
+async function adjustLeftoverRemaining(sourceId: number, delta: number): Promise<void> {
+  const cachedList = await getCachedGet<any[]>(LEFTOVERS_PATH);
+  let source: any = Array.isArray(cachedList) ? cachedList.find((p) => p?.id === sourceId) : undefined;
+  await forEachCachedGet(isWeekPlanPath, (data) => {
+    if (!Array.isArray(data)) return undefined;
+    const idx = data.findIndex((p: any) => p?.id === sourceId);
+    if (idx === -1) return undefined;
+    source ??= data[idx];
+    const next = data.slice();
+    next[idx] = withRemaining(data[idx], delta);
+    return next;
+  });
+  if (source) await syncCachedLeftover(withRemaining(source, delta));
+}
+
+/** A cached planned dish by id, from any cached week or the leftovers list. */
+async function findCachedPlan(id: number): Promise<any> {
+  const weeks = await findCachedGets(isWeekPlanPath);
+  const leftovers = await getCachedGet<any[]>(LEFTOVERS_PATH);
+  return [...weeks.flatMap(([, data]) => (Array.isArray(data) ? data : [])), ...(Array.isArray(leftovers) ? leftovers : [])]
+    .find((p: any) => p?.id === id);
+}
+
+const withRemaining = (p: any, delta: number) => ({
+  ...p,
+  leftoverRemaining: Math.min(p.leftoverPortions ?? 0, Math.max(0, (p.leftoverRemaining ?? 0) + delta)),
+});
 
 /** Optimistic update of the cached week plans for the three planner mutations:
  * POST /planner/:date/:slot (add a dish), PUT /planner/entry/:id (move/edit) and DELETE /planner/entry/:id. */
@@ -40,14 +80,19 @@ async function patchPlannerEntries(method: string, target: { date?: string; slot
   });
 
   if (method === 'POST') {
+    // Leftovers take all remaining portions unless a number was given, like the server.
+    const source = body?.leftoverFromId && body?.servings === undefined ? await findCachedPlan(body.leftoverFromId) : undefined;
     const entry = denormalize({
       id: tempId ?? -Date.now(),
       planDate: target.date,
       mealSlot: target.slot,
       mealId: body?.mealId ?? null,
-      servings: body?.servings ?? meal?.servings ?? 1,
+      servings: body?.servings ?? (source ? Math.max(1, source.leftoverRemaining ?? 0) : meal?.servings ?? 1),
       notes: body?.notes ?? null,
       customName: body?.customName ?? null,
+      leftoverPortions: 0,
+      leftoverRemaining: 0,
+      leftoverFromId: body?.leftoverFromId ?? null,
       assignedByUserId: null,
       mealName: null,
       mealPrepTime: null,
@@ -60,16 +105,30 @@ async function patchPlannerEntries(method: string, target: { date?: string; slot
     await forEachCachedGet(isWeekPlanPath, (data, path) =>
       Array.isArray(data) && weekContains(path, target.date) ? [...data, entry] : undefined
     );
+    if (entry.leftoverFromId !== null) await adjustLeftoverRemaining(entry.leftoverFromId, -entry.servings);
     return;
   }
 
-  const weeks = await findCachedGets(isWeekPlanPath);
-  const existing = weeks
-    .flatMap(([, data]) => (Array.isArray(data) ? data : []))
-    .find((p: any) => p?.id === target.id);
+  const existing = await findCachedPlan(target.id!);
   if (!existing) return;
   // A move (PUT with a new planDate) can take the entry into a different cached week.
-  const updated = method === 'DELETE' ? undefined : denormalize({ ...existing, ...body, _pendingSync: true });
+  let updated = method === 'DELETE' ? undefined : denormalize({ ...existing, ...body, _pendingSync: true });
+  if (updated && body?.leftoverPortions !== undefined) {
+    const used = (existing.leftoverPortions ?? 0) - (existing.leftoverRemaining ?? 0);
+    updated = { ...updated, leftoverRemaining: Math.max(0, body.leftoverPortions - used) };
+  }
+
+  if (updated) {
+    if (updated.leftoverPortions > 0 || existing.leftoverRemaining > 0) await syncCachedLeftover(updated);
+    // Changing how many portions of leftovers an entry holds takes them from (or gives them back to) the dish.
+    if (existing.leftoverFromId && body?.servings !== undefined && body.servings !== existing.servings) {
+      await adjustLeftoverRemaining(existing.leftoverFromId, (existing.servings ?? 0) - body.servings);
+    }
+  } else {
+    // Removing leftovers hands their portions back; removing the original dish drops its leftovers.
+    if (existing.leftoverFromId) await adjustLeftoverRemaining(existing.leftoverFromId, existing.servings ?? 1);
+    if (existing.leftoverPortions > 0) await syncCachedLeftover({ ...existing, leftoverRemaining: 0 });
+  }
 
   await forEachCachedGet(isWeekPlanPath, (data, path) => {
     if (!Array.isArray(data)) return undefined;
