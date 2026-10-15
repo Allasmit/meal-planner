@@ -193,6 +193,20 @@ export const weeklyRules = sqliteTable('weekly_rules', {
   isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(true),
 });
 
+// ─── Calendar feeds ───────────────────────────────────────────────────────────
+
+/** An iCal feed (e.g. a Google Calendar secret address) shown on the planner. The URL is secret and never sent to clients. */
+export const calendarFeeds = sqliteTable('calendar_feeds', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  url: text('url').notNull(),
+  color: text('color').notNull(),
+  /** When false, events show only as "Busy" with their times. */
+  showDetails: integer('show_details', { mode: 'boolean' }).notNull().default(true),
+  createdByUserId: integer('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+});
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many }) => ({

@@ -229,3 +229,30 @@ export interface CsvImportResult {
   errors: number;
   results: { row: number; name: string; status: 'created' | 'error'; error?: string; warnings?: string[] }[];
 }
+
+/** A calendar (e.g. a Google Calendar secret iCal address) shown on the planner. The address itself stays on the server. */
+export interface CalendarFeed {
+  id: number;
+  name: string;
+  color: string;
+  /** False: events show only as "Busy". */
+  showDetails: boolean;
+  urlHint: string;
+  createdByUserId: number | null;
+}
+
+/** Timed events carry UTC ISO instants; all-day events carry YYYY-MM-DD dates with an exclusive end. */
+export interface CalendarEvent {
+  feedId: number;
+  title: string;
+  location: string | null;
+  allDay: boolean;
+  start: string;
+  end: string;
+}
+
+export interface CalendarWeek {
+  feeds: CalendarFeed[];
+  events: CalendarEvent[];
+  errors: { feedId: number; message: string }[];
+}

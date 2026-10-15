@@ -6,6 +6,7 @@
   import { logout } from '$lib/session';
   import { getWeekStartDay, setWeekStartDay } from '$lib/utils';
   import FamilyManager from '$lib/components/FamilyManager.svelte';
+  import CalendarManager from '$lib/components/CalendarManager.svelte';
   import type { User, PlannerRule, PlannerSettings, IngredientCategory } from '$lib/types';
 
   let users = $state<User[]>([]);
@@ -184,6 +185,9 @@
   <!-- Family profiles -->
   <FamilyManager />
 
+  <!-- Calendars shown on the planner -->
+  <CalendarManager />
+
   <!-- Weekly rules -->
   {#if rules.length > 0}
     <div class="rounded-xl shadow-sm p-4 space-y-3" style="background: var(--color-surface); border: 1px solid var(--color-border)">
@@ -309,10 +313,4 @@
     </div>
   {/if}
 
-  <!-- Google Calendar placeholder -->
-  <div class="rounded-xl shadow-sm p-4 opacity-60" style="background: var(--color-surface); border: 1px solid var(--color-border)">
-    <div class="text-sm font-semibold uppercase mb-2" style="color: var(--color-text-muted)">Google Calendar</div>
-    <p class="text-sm" style="color: var(--color-text-muted)">Connect your Google Calendar to get smart meal suggestions based on your schedule.</p>
-    <button disabled class="mt-3 text-sm border rounded-lg px-3 py-1.5 cursor-not-allowed" style="border-color: var(--color-border); color: var(--color-text-muted)">Coming soon</button>
-  </div>
 </div>

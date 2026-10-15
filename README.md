@@ -185,6 +185,14 @@ Valid slots: `breakfast` `lunch` `dinner` `snack`
 | POST | `/api/import/url`, `/social`, `/parse-html`, `/text`, `/csv`, `/media` | Recipe imports. URL imports only fetch public addresses; `/media` takes an image or PDF (OCR) up to 15 MB; `/csv` reports per-row warnings |
 | GET | `/api/import/csv-template` | Example CSV |
 
+### Calendar
+
+| Method | Path | Notes |
+|---|---|---|
+| GET / POST | `/api/calendar/feeds` | `{ url, name?, color?, showDetails? }`. The URL (e.g. a Google Calendar "Secret address in iCal format", `webcal://` accepted) is checked before saving and never returned |
+| PATCH / DELETE | `/api/calendar/feeds/:id` | Creator or admin. `{ name?, color?, showDetails? }`; `showDetails: false` shows events as "Busy" |
+| GET | `/api/calendar/events?weekStart=YYYY-MM-DD` | `{ feeds, events, errors }` — recurring events expanded; feeds are cached for 10 minutes |
+
 ---
 
 ## Database Schema
@@ -202,6 +210,7 @@ Valid slots: `breakfast` `lunch` `dinner` `snack`
 | `family_members`, `family_member_dietary_types` | People and their dietary needs |
 | `weekly_rules` | Planner rules (protein/category caps, leftover days, batch day) |
 | `user_settings` | key/value (monthly budget, batch cooking day) |
+| `calendar_feeds` | name, url (secret, server-only), color, show_details, created_by_user_id |
 | `__migrations` | Applied SQL migrations |
 
 **Back up `packages/api/data/`** (the database *and* the `images/` folder). The API also writes a daily backup of the database to `data/backups/` (keeps 14; `BACKUP_ENABLED=false` / `BACKUP_KEEP=n` to change) and a backup before any migration.
@@ -512,7 +521,7 @@ API tests (`packages/api/test`) cover the shopping list, auto-generator, ingredi
 
 ## Planned Features
 
-- **Google Calendar integration** — smart meal suggestions based on your schedule
+- **Calendar-aware auto-plan** — prefer quick meals or leftovers on busy evenings (the planner already shows the schedule)
 - **Nutritional info** — calories/macros per meal
 - **Servings scaling** — scale shopping-list quantities by a plan's servings (needs a way to edit servings per slot)
 - **Checkers Sixty60 deep link** — placeholder ready for when URI scheme is published

@@ -9,6 +9,7 @@ import { mealsRouter } from './routes/meals';
 import { plannerRouter } from './routes/planner';
 import { importRouter } from './routes/import';
 import { familyRouter } from './routes/family';
+import { calendarRouter } from './routes/calendar';
 import { runMigrations } from './db/migrate';
 import { imagesRouter } from './routes/images';
 import { migrateInlineImages, removeOrphanedImages } from './lib/images';
@@ -41,6 +42,7 @@ app.use('/api/meals', mealsRouter);
 app.use('/api/planner', plannerRouter);
 app.use('/api/import', importRouter);
 app.use('/api/family', familyRouter);
+app.use('/api/calendar', calendarRouter);
 app.use('/api/images', imagesRouter);
 
 // Health check

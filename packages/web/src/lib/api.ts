@@ -3,7 +3,7 @@ import { enqueueMutation } from './offline/queue';
 import { applyOptimisticPatch } from './offline/patch';
 import { refreshPendingCount, flushQueue, markSynced, markOffline, isOnline, checkServer } from './offline/sync';
 import type {
-  AutoGenerateRequest, AutoGenerateResult, CostSummary, CsvImportResult, Cuisine, DietaryType, FamilyMember,
+  AutoGenerateRequest, AutoGenerateResult, CalendarFeed, CalendarWeek, CostSummary, CsvImportResult, Cuisine, DietaryType, FamilyMember,
   FamilyMemberInput, ImportedMeal, Ingredient, IngredientCategory, Meal, MealCategory, MealFormData, MealPlan,
   PlannerRule, PlannerSettings, ProteinType, LeftoverBehaviour, ShoppingListCategory, User,
 } from './types';
@@ -27,6 +27,10 @@ const FETCH_TIMEOUT_MS = 6_000;
 // legitimately take far longer than a normal API call. Aborting them early would
 // make the UI report "offline" while the server still creates the recipe.
 const IMPORT_TIMEOUT_MS = 120_000;
+
+// Calendar events are read from Google (or another calendar server) by the API, which can be slow
+// the first time a week is opened. A slow calendar must not make the whole app look offline.
+const CALENDAR_TIMEOUT_MS = 30_000;
 
 // How long a GET waits for the server before showing the cached copy (when there is one).
 const SLOW_RESPONSE_MS = 2_500;
@@ -84,7 +88,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // in, or scrape/OCR a recipe, offline) and their responses are used
   // directly by the caller, so they're never queued - only cacheable GETs
   // and simple resource mutations (meals/planner/family/users) are deferred.
-  const isQueueable = isMutation && !isFormData && !path.startsWith('/auth') && !path.startsWith('/import');
+  // Adding a calendar checks its link on the server, so calendar changes need a connection too.
+  const isQueueable = isMutation && !isFormData && !path.startsWith('/auth') && !path.startsWith('/import') && !path.startsWith('/calendar');
 
   // Known offline (see isOnline() in offline/sync.ts - it also covers a phone
   // that's on wifi/cellular but can't reach the server): answer from the
@@ -134,7 +139,9 @@ async function send<T>(
       ...options,
       // NOTE: spread after `...options` so a caller-supplied signal (none
       // currently pass one) would win; this is our own safety-net timeout.
-      signal: AbortSignal.timeout(path.startsWith('/import') ? IMPORT_TIMEOUT_MS : FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(
+        path.startsWith('/import') ? IMPORT_TIMEOUT_MS : path.startsWith('/calendar') ? CALENDAR_TIMEOUT_MS : FETCH_TIMEOUT_MS,
+      ),
     });
 
     if (!res.ok) {
@@ -180,6 +187,9 @@ async function send<T>(
       // and the server may still finish it - don't flip the whole app to offline.
       if (path.startsWith('/import') && err instanceof DOMException) {
         throw new Error('The import is taking longer than expected. Check the Meals list before trying again.');
+      }
+      if (path.startsWith('/calendar') && err instanceof DOMException) {
+        throw new Error('The calendar is taking too long to load.');
       }
       markOffline();
       if (isMutation) {
@@ -275,4 +285,12 @@ export const api = {
     request<{ ok: true }>('/planner/settings', { method: 'PATCH', body: json(body) }),
   autoGenerateWeek: (body: AutoGenerateRequest) =>
     request<AutoGenerateResult>('/planner/auto-generate', { method: 'POST', body: json(body) }),
+
+  getCalendarFeeds: () => request<CalendarFeed[]>('/calendar/feeds'),
+  addCalendarFeed: (body: { url: string; name?: string; color?: string; showDetails?: boolean }) =>
+    request<CalendarFeed>('/calendar/feeds', { method: 'POST', body: json(body) }),
+  updateCalendarFeed: (id: number, body: Partial<Pick<CalendarFeed, 'name' | 'color' | 'showDetails'>>) =>
+    request<CalendarFeed>(`/calendar/feeds/${id}`, { method: 'PATCH', body: json(body) }),
+  deleteCalendarFeed: (id: number) => request<{ ok: true }>(`/calendar/feeds/${id}`, { method: 'DELETE' }),
+  getCalendarWeek: (weekStart: string) => request<CalendarWeek>(`/calendar/events?weekStart=${weekStart}`),
 };

@@ -10,6 +10,7 @@ build/
 .env.local
 .env.*.local
 packages/api/data/
+caddy-root.crt
 
 # Personal Claude Code settings
 .claude/settings.local.json

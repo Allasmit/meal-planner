@@ -4,8 +4,9 @@
   import MealBrowser from '$lib/components/MealBrowser.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import FilterChip from '$lib/components/FilterChip.svelte';
+  import { busyDuring, eventsByDay, formatEventTime } from '$lib/calendar';
   import { getWeekStart, getWeekStartDay, setWeekStartDay, getWeekDays, toDateString, formatDayShort, formatWeekRange, MEAL_SLOTS, SLOT_LABELS, DIFFICULTY_COLORS } from '$lib/utils';
-  import type { MealPlan, Meal, FamilyMember, CostSummary, AutoGenerateResult } from '$lib/types';
+  import type { MealPlan, Meal, FamilyMember, CostSummary, AutoGenerateResult, CalendarWeek, CalendarEvent } from '$lib/types';
 
   let weekStart = $state(getWeekStart());
   let planMap = $state(new Map<string, MealPlan[]>());
@@ -30,6 +31,58 @@
 
   let weekDays = $derived(getWeekDays(weekStart));
   let weekLabel = $derived(formatWeekRange(weekStart));
+
+  // ─── Calendar (schedule from connected calendars) ──────────────────────────
+  const SHOW_SCHEDULE_KEY = 'plannerShowSchedule';
+  const SCHEDULE_PREVIEW = 4; // events shown per day before "+ more"
+
+  let calendar = $state<CalendarWeek | null>(null);
+  let calendarError = $state('');
+  let showSchedule = $state(readShowSchedule());
+  let expandedDays = $state(new Set<string>());
+
+  function readShowSchedule(): boolean {
+    try { return localStorage.getItem(SHOW_SCHEDULE_KEY) !== 'false'; } catch { return true; }
+  }
+
+  function toggleSchedule() {
+    showSchedule = !showSchedule;
+    moreOpen = false;
+    try { localStorage.setItem(SHOW_SCHEDULE_KEY, String(showSchedule)); } catch { /* ignore */ }
+  }
+
+  function toggleDayExpanded(date: string) {
+    const next = new Set(expandedDays);
+    if (next.has(date)) next.delete(date);
+    else next.add(date);
+    expandedDays = next;
+  }
+
+  const hasCalendars = $derived((calendar?.feeds.length ?? 0) > 0);
+  const scheduleVisible = $derived(showSchedule && hasCalendars);
+  const feedColor = $derived(new Map(calendar?.feeds.map((f) => [f.id, f.color]) ?? []));
+  const dayEvents = $derived(eventsByDay(calendar?.events ?? [], weekDays.map(toDateString)));
+  const eventsOn = (date: string) => dayEvents.get(date) ?? [];
+  const eventLabel = (ev: CalendarEvent, date: string) =>
+    `${formatEventTime(ev, date)} · ${ev.title}${ev.location ? ` (${ev.location})` : ''}`;
+  const busyAt = (date: string, slot: string) => (scheduleVisible ? busyDuring(eventsOn(date), date, slot) : []);
+  const busyTitle = (busy: CalendarEvent[], date: string) => busy.map((ev) => eventLabel(ev, date)).join('\n');
+  const calendarProblems = $derived(
+    (calendar?.errors ?? []).map((e) => `${calendar?.feeds.find((f) => f.id === e.feedId)?.name ?? 'Calendar'}: ${e.message}`),
+  );
+
+  /** Loads the week's events separately so a slow calendar never holds up the meal plan. */
+  async function loadCalendar(week: string) {
+    try {
+      const result = await api.getCalendarWeek(week);
+      if (week !== toDateString(weekStart)) return;
+      calendar = result;
+      calendarError = '';
+    } catch (e: any) {
+      if (week !== toDateString(weekStart)) return;
+      calendarError = e?.message ?? 'Could not load your calendar';
+    }
+  }
 
   onMount(async () => {
     loadWeek();
@@ -56,6 +109,10 @@
     if (!quiet) loading = true;
     loadError = '';
     loadNotice = '';
+    if (!quiet) {
+      expandedDays = new Set();
+      loadCalendar(requestedWeek);
+    }
     try {
       const [plans, summary, remaining] = await Promise.all([
         api.getWeekPlan(requestedWeek),
@@ -506,6 +563,11 @@
         {#if moreOpen}
           <div role="menu" class="absolute right-0 mt-2 w-48 rounded-2xl shadow-lg p-1.5 z-30" style="background: var(--color-surface); border: 1px solid var(--color-border)">
             <button role="menuitem" onclick={printWeek} class="w-full text-left text-sm px-3 py-2.5 rounded-xl hover:bg-black/5 dark:hover:bg-white/10" style="color: var(--color-text)">🖨️ Print / PDF</button>
+            {#if hasCalendars}
+              <button role="menuitem" onclick={toggleSchedule} class="w-full text-left text-sm px-3 py-2.5 rounded-xl hover:bg-black/5 dark:hover:bg-white/10" style="color: var(--color-text)">📅 {showSchedule ? 'Hide' : 'Show'} schedule</button>
+            {:else}
+              <a role="menuitem" href="/settings" class="block w-full text-left text-sm px-3 py-2.5 rounded-xl hover:bg-black/5 dark:hover:bg-white/10" style="color: var(--color-text)">📅 Connect a calendar</a>
+            {/if}
             <button
               role="menuitem"
               onclick={() => { moreOpen = false; clearWeek(); }}
@@ -538,6 +600,12 @@
   {/if}
   {#if loadNotice}
     <div class="mb-4 rounded-xl px-4 py-2 text-sm print:hidden" role="status" style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text-muted)">{loadNotice}</div>
+  {/if}
+
+  {#if showSchedule && (calendarError || calendarProblems.length) && !loadError}
+    <div class="mb-4 rounded-xl px-4 py-2 text-xs print:hidden" role="status" style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text-muted)">
+      📅 {calendarError || calendarProblems.join(' · ')}
+    </div>
   {/if}
 
   {#if leftovers.length && !loadError}
@@ -592,6 +660,33 @@
           </tr>
         </thead>
         <tbody>
+          {#if scheduleVisible}
+            <tr class="print:hidden">
+              <td class="py-2 pr-2 font-medium text-xs align-top" style="color: var(--color-text-muted)">📅 Schedule</td>
+              {#each weekDays as day}
+                {@const dateStr = toDateString(day)}
+                {@const events = eventsOn(dateStr)}
+                {@const shown = expandedDays.has(dateStr) ? events : events.slice(0, SCHEDULE_PREVIEW)}
+                <td class="py-1 px-1 align-top">
+                  <ul class="space-y-1" aria-label="Schedule for {formatDayShort(day)}">
+                    {#each shown as ev}
+                      <li class="text-xs rounded-md pl-1.5 pr-1 py-1 leading-tight" style="border-left: 3px solid {feedColor.get(ev.feedId)}; background: var(--color-bg)" title={eventLabel(ev, dateStr)}>
+                        <div class="tabular-nums" style="color: var(--color-text-muted)">{formatEventTime(ev, dateStr)}</div>
+                        <div class="font-medium truncate" style="color: var(--color-text)">{ev.title}</div>
+                      </li>
+                    {:else}
+                      <li class="text-xs px-1.5 py-1" style="color: var(--color-text-muted)">Nothing on</li>
+                    {/each}
+                  </ul>
+                  {#if events.length > SCHEDULE_PREVIEW}
+                    <button onclick={() => toggleDayExpanded(dateStr)} class="text-xs px-1.5 mt-1 hover:underline" style="color: var(--color-accent)">
+                      {expandedDays.has(dateStr) ? 'Show less' : `+${events.length - SCHEDULE_PREVIEW} more`}
+                    </button>
+                  {/if}
+                </td>
+              {/each}
+            </tr>
+          {/if}
           {#each MEAL_SLOTS as slot}
             <tr class="border-t" style="border-color: var(--color-border)">
               <td class="py-2 pr-2 font-medium capitalize text-xs" style="color: var(--color-text-muted)">{SLOT_LABELS[slot]}</td>
@@ -599,6 +694,7 @@
                 {@const dateStr = toDateString(day)}
                 {@const plans = plansFor(dateStr, slot)}
                 {@const hovered = dragOver === `${dateStr}::${slot}` && !plans.some((p) => isDragging(p.id))}
+                {@const busy = busyAt(dateStr, slot)}
                 <td class="py-1 px-1 align-top" data-drop-date={dateStr} data-drop-slot={slot}>
                   <div class="space-y-1 rounded-lg" style="outline: {hovered ? '2px solid var(--color-accent)' : 'none'}; outline-offset: 2px">
                     {#each plans as plan (plan.id)}
@@ -632,6 +728,12 @@
                         </div>
                       </div>
                     {/each}
+                    {#if busy.length}
+                      <div class="text-xs leading-tight flex items-center gap-1 print:hidden" style="color: var(--color-text-muted)" title={busyTitle(busy, dateStr)}>
+                        <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: {feedColor.get(busy[0].feedId)}" aria-hidden="true"></span>
+                        <span class="truncate">Busy {formatEventTime(busy[0], dateStr)}{busy.length > 1 ? ` +${busy.length - 1}` : ''}</span>
+                      </div>
+                    {/if}
                     <div class="flex gap-1 print:hidden">
                       <button onclick={() => openPicker(dateStr, slot)}
                         class="flex-1 border-2 border-dashed rounded-lg transition-colors {plans.length ? 'h-6 text-sm' : 'h-14 text-xl'}"
@@ -664,16 +766,33 @@
           <div class="px-4 py-2 border-b font-semibold text-sm" style="background: var(--color-bg); border-color: var(--color-border); color: {dateStr === today ? 'var(--color-accent)' : 'var(--color-text)'}">
             {formatDayShort(day)}{dateStr === today ? ' · Today' : ''}
           </div>
+          {#if scheduleVisible && eventsOn(dateStr).length}
+            <ul class="px-4 py-2 border-b space-y-1" style="border-color: var(--color-border)" aria-label="Schedule for {formatDayShort(day)}">
+              {#each eventsOn(dateStr) as ev}
+                <li class="flex items-baseline gap-2 text-xs" title={eventLabel(ev, dateStr)}>
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background: {feedColor.get(ev.feedId)}" aria-hidden="true"></span>
+                  <span class="tabular-nums shrink-0 w-20" style="color: var(--color-text-muted)">{formatEventTime(ev, dateStr)}</span>
+                  <span class="min-w-0 truncate font-medium" style="color: var(--color-text)">{ev.title}</span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
           <div class="divide-y" style="border-color: var(--color-border)">
             {#each MEAL_SLOTS as slot}
               {@const plans = plansFor(dateStr, slot)}
               {@const hovered = dragOver === `${dateStr}::${slot}` && !plans.some((p) => isDragging(p.id))}
+              {@const busy = busyAt(dateStr, slot)}
               <div
                 class="px-4 py-2 flex items-start gap-3"
                 data-drop-date={dateStr} data-drop-slot={slot}
                 style="background: {hovered ? 'var(--color-accent-light)' : 'transparent'}"
               >
-                <span class="text-xs w-16 shrink-0 pt-1" style="color: var(--color-text-muted)">{SLOT_LABELS[slot]}</span>
+                <div class="w-16 shrink-0 pt-1">
+                  <span class="block text-xs" style="color: var(--color-text-muted)">{SLOT_LABELS[slot]}</span>
+                  {#if busy.length}
+                    <span class="block text-[11px] leading-tight mt-0.5 font-medium" style="color: {feedColor.get(busy[0].feedId)}" title={busyTitle(busy, dateStr)}>Busy</span>
+                  {/if}
+                </div>
                 <div class="flex-1 min-w-0 space-y-1">
                   {#each plans as plan (plan.id)}
                     <div
